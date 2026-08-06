@@ -1078,10 +1078,23 @@ class SeeImage(Tool):
             req = urllib.request.Request(
                 self._ollama_url, data=json.dumps(payload).encode(),
                 headers={"Content-Type": "application/json"})
-            r = urllib.request.urlopen(req, timeout=400)
+            # Cap at 90s — a local vision model that takes longer than this is
+            # effectively stalled and would hang the whole agent turn (was 400s).
+            r = urllib.request.urlopen(req, timeout=90)
             data = json.loads(r.read().decode())
             desc = (data.get("message", {}).get("content")
                     or "").strip()
+            # Refusal guard: some vision models return a canned "I can't see"
+            # line instead of describing the image. Surface that honestly
+            # rather than letting the agent parrot a non-answer.
+            refusal = any(k in desc.lower() for k in (
+                "unable to see", "cannot see", "can't see", "as an ai",
+                "i am unable", "i cannot interpret", "no visual"))
+            if refusal:
+                return {"ok": False, "error":
+                        f"vision model '{self._vision_model}' returned a "
+                        f"refusal/non-answer: {desc[:120]}. The vision model "
+                        f"may be misconfigured or too weak for this image."}
         except Exception as e:
             return {"ok": False,
                     "error": f"vision model failed ({self._vision_model}): {e}"}

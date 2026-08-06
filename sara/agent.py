@@ -1241,6 +1241,31 @@ class Sara:
                 # reset counters when a well-formed call appears
                 self._broken_count = {}
 
+            # GENERIC LOOP GUARD (B30): the small model sometimes repeats the
+            # SAME tool call with the SAME arg over and over (e.g. a failing
+            # `ssh_run ... :: ls /path/to/` that returns exit 2 each time, or a
+            # `shell ls /missing/` loop). The write/append broken-arg guard
+            # above doesn't catch these. Track identical (name, arg) across the
+            # whole turn; after 3 repeats, inject a recovery nudge instead of
+            # spinning until max_steps is exhausted.
+            self._repeat = getattr(self, "_repeat", {})
+            rep_key = f"{name}\x00{arg_stripped}"
+            self._repeat[rep_key] = self._repeat.get(rep_key, 0) + 1
+            if self._repeat[rep_key] >= 3:
+                self._repeat[rep_key] = 0
+                c.warn(f"repeated identical {name} call ({self._repeat[rep_key]}x) "
+                       f"— breaking the loop")
+                messages.append({"role": "assistant", "content": reply})
+                messages.append({"role": "user", "content":
+                    f"You've now called `{name}` with the exact same argument "
+                    f"({arg_stripped[:80]!r}) at least 3 times and it keeps "
+                    f"failing or repeating. STOP re-issuing it. Either: (a) fix "
+                    f"the argument (wrong path/host/command?), (b) try a "
+                    f"different tool or approach, or (c) if you've already "
+                    f"confirmed the result, just answer the user from what "
+                    f"you have. Do not loop."})
+                continue
+
             c.act(name, arg.replace("\n", " ⏎ ")[:120])
             result = tool.run(arg)
             used_tool = True
