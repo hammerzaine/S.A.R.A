@@ -715,21 +715,45 @@ class MariaDB(Tool):
         return (f"mariadb wrote — {r.get('affected', 0)} row(s) affected, "
                 f"last id {r.get('last_insert_id', '?')}")
 
-
 class SSHRun(Tool):
-    """Run a shell command on 192.168.2.140 as root via key auth (no password prompt).
+    """Run a shell command on a remote host as root via key auth (no password prompt).
 
     Arg form:
-      <command>                    run on default host (192.168.2.140) as root
+      <command>                    run on default host (see HOST_ALIASES) as root
       <user>@<host> :: <command>   run on a specific host/user
     S.A.R.A uses her own SSH key (sara_agent_key) — BatchMode, never prompts.
+
+    Friendly host aliases are resolved before connecting so "website server"
+    lands on the right box and not the database host (see HOST_ALIASES).
     """
+
+    # Friendly names -> actual hosts. "website"/"website server" is .225,
+    # "database"/"home server" is .140. Prevents landing on the wrong box.
+    HOST_ALIASES = {
+        "website": "192.168.2.225", "website-server": "192.168.2.225",
+        "website server": "192.168.2.225", "web": "192.168.2.225",
+        "225": "192.168.2.225", ".225": "192.168.2.225",
+        "database": "192.168.2.140", "db": "192.168.2.140",
+        "home-server": "192.168.2.140", "home server": "192.168.2.140",
+        "home": "192.168.2.140", "140": "192.168.2.140", ".140": "192.168.2.140",
+    }
+
     name = "ssh_run"
-    description = ("Run a shell command on the home server (192.168.2.140) as "
-                   "root over SSH (key auth, no password prompt). Use for remote "
-                   "sysadmin: check a service, read a remote file, restart something.")
-    usage = ("ssh_run <command>                e.g. ssh_run uptime\n"
+    description = ("Run a shell command on a remote server as root over SSH "
+                   "(key auth, no password prompt). Use for remote sysadmin: "
+                   "check a service, read a remote file, restart something. "
+                   "Accepts friendly host names: 'website server' = 192.168.2.225, "
+                   "'database'/'home server' = 192.168.2.140.")
+    usage = ("ssh_run <command>                       e.g. ssh_run uptime\n"
+             "    ssh_run website server :: ls /var/www/html\n"
              "    ssh_run root@192.168.2.140 :: df -h")
+
+    @staticmethod
+    def _resolve_host(host: str | None) -> str | None:
+        if not host:
+            return host
+        h = host.strip().lower()
+        return SSHRun.HOST_ALIASES.get(h, host)
 
     def __init__(self):
         self._cfg = self._load_creds()
@@ -748,13 +772,23 @@ class SSHRun(Tool):
         if not arg:
             return {"ok": False, "error": "no command given"}
         host, user = self._cfg.get("host"), self._cfg.get("user")
-        # optional explicit target: "user@host :: command"
-        m = re.match(r"^([\w.-]+)@([\w.-]+)\s*::\s*(.+)$", arg, re.S)
+        # Target forms (user@ optional; friendly aliases supported):
+        #   "user@host :: command"   explicit host/user
+        #   "host :: command"        host only (default user from creds)
+        #   "alias :: command"       friendly name (website server -> .225)
+        #   "command"                default host from creds
+        m = re.match(r"^(?:([\w.-]+)@)?([\w.\- ]+?)\s*::\s*(.+)$", arg, re.S)
         if m:
-            user, host, command = m.group(1), m.group(2), m.group(3).strip()
+            if m.group(1):
+                user = m.group(1)
+            host = m.group(2).strip()
+            command = m.group(3).strip()
         else:
             command = arg
+        # Resolve friendly host names to real IPs (website server -> .225 etc.)
+        host = self._resolve_host(host)
         key = os.path.expanduser(self._cfg.get("key_path", "~/.ssh/sara_agent_key"))
+
         try:
             import paramiko
             client = paramiko.SSHClient()
