@@ -18,6 +18,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 HOME = Path.home()
@@ -664,7 +665,12 @@ class MariaDB(Tool):
         port = int(self._cfg.get("port", 3306))
         user = self._cfg.get("user")
         pw = self._cfg.get("password")
-        db = database or self._cfg.get("default_database")
+        # Connect WITHOUT selecting a database by default. pymysql raises
+        # "Unknown database" at connect time if the configured default_db is
+        # missing, which breaks even `SHOW DATABASES`. The user selects a DB
+        # per-query with the `db|` prefix; without it we connect bare so
+        # server-level queries work.
+        db = database or None
         conn = pymysql.connect(host=host, port=port, user=user, password=pw,
                                database=db, charset="utf8mb4",
                                cursorclass=pymysql.cursors.DictCursor,
@@ -839,12 +845,27 @@ class WinRun(Tool):
       <user>@<host> :: <command>      run on a specific host/user
     """
     name = "win_run"
-    description = ("Run a command on the Windows PC over SSH (OpenSSH server, "
+    description = ("Run a command on a Windows PC over SSH (OpenSSH server, "
                    "key auth). Use for Windows sysadmin: ipconfig, Get-Process, "
-                   "dir, services, powershell one-liners. Same SSH as Linux.")
+                   "dir, services, powershell one-liners. Same SSH as Linux. "
+                   "Accepts friendly host names: 'windows'/'win'/'143' -> "
+                   "192.168.2.143.")
     usage = ("win_run <command>                    e.g. win_run ipconfig\n"
              "    win_run powershell -NoProfile -Command \"Get-Process\"\n"
-             "    win_run admin@192.168.2.100 :: systeminfo")
+             "    win_run admin@192.168.2.143 :: systeminfo")
+
+    # Friendly names -> actual Windows hosts. The real Windows box is .143.
+    HOST_ALIASES = {
+        "windows": "192.168.2.143", "win": "192.168.2.143",
+        "143": "192.168.2.143", ".143": "192.168.2.143",
+        "100": "192.168.2.100", ".100": "192.168.2.100",
+    }
+
+    @staticmethod
+    def _resolve_host(host):
+        if not host:
+            return host
+        return WinRun.HOST_ALIASES.get(host.strip().lower(), host)
 
     def __init__(self):
         self._cfg = self._load_creds()
@@ -863,13 +884,14 @@ class WinRun(Tool):
         arg = (arg or "").strip().strip("`\"'")
         if not arg:
             return {"ok": False, "error": "no command given"}
-        # guessed default Windows host (same /24 as the home server)
-        host = self._cfg.get("host") or "192.168.2.100"
+        # guessed default Windows host (the real Windows box is .143)
+        host = self._resolve_host(self._cfg.get("host") or "192.168.2.143")
         user = self._cfg.get("user") or "administrator"
         # optional explicit target: "user@host :: command"
         m = re.match(r"^([\w.-]+)@([\w.-]+)\s*::\s*(.+)$", arg, re.S)
         if m:
             user, host, command = m.group(1), m.group(2), m.group(3).strip()
+            host = self._resolve_host(host)
         else:
             command = arg
         key = os.path.expanduser(self._cfg.get("key_path", "~/.ssh/sara_agent_key"))
@@ -1096,11 +1118,71 @@ class ConfigTool(Tool):
 
     ALLOWED = {"provider", "base_url", "model", "api_key", "fallback_models",
                "max_steps", "verbose", "no_research"}
-    PROVIDERS = {"ollama": "http://127.0.0.1:11434/v1",
-                 "openai": "https://api.openai.com/v1",
-                 "openrouter": "https://openrouter.ai/api/v1",
-                 "localai": "http://127.0.0.1:8080/v1",
-                 "custom": ""}
+    # Expanded provider presets (OpenAI-compatible base_url where one exists).
+    # Aggregator/OAuth providers that need an API key + a chosen model are
+    # listed by their canonical preset name; set base_url to the provider's
+    # endpoint when you switch (or leave custom + set base_url manually).
+    PROVIDERS = {
+        "ollama": "http://127.0.0.1:11434/v1",
+        "openai": "https://api.openai.com/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+        "localai": "http://127.0.0.1:8080/v1",
+        "custom": "",
+        # --- cloud / aggregator presets (need api_key; pick a model after) ---
+        "nous": "https://portal.nousresearch.com/v1",
+        "fireworks": "https://api.fireworks.ai/inference/v1",
+        "novita": "https://api.novita.ai/v3/openai",
+        "ollama-cloud": "https://api.ollama.com/v1",
+        "deepinfra": "https://api.deepinfra.com/v1/openai",
+        "deepseek": "https://api.deepseek.com/v1",
+        "zai-glm": "https://open.bigmodel.cn/api/paas/v4",
+        "kimi-moonshot": "https://api.moonshot.cn/v1",
+        "stepfun": "https://api.stepfun.com/v1",
+        "minimax": "https://api.minimax.io/v1",
+        "arcee": "https://api.arcee.ai/v1",
+        "gmi-cloud": "https://api.gmi-serving.com/v1",
+        "kilo-code": "https://aider.kilocode.ai/v1",
+        "opencode": "https://api.opencode.ai/v1",
+        "alibaba-coding": "https://api.aliyun.com/v1",
+        "tencent-tokenhub": "https://tokenhub.tencentmaas.com/v1",
+        "nvidia-nim": "https://integrate.api.nvidia.com/v1",
+        "huggingface": "https://router.huggingface.co/v1",
+        "google-ai-studio": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "xai-grok": "https://api.x.ai/v1",
+        "anthropic": "https://api.anthropic.com/v1",
+        "aws-bedrock": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "azure-foundry": "https://YOUR-RESOURCE.openai.azure.com",
+        "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "upstage": "https://api.upstage.ai/v1/solar",
+        # --- named presets that need your key + chosen model (no fixed url) ---
+        "mixture-of-agents": "",
+        "lm-studio": "http://127.0.0.1:1234/v1",
+        "github-copilot": "https://api.githubcopilot.com",
+        "xiaomi-mimo": "https://api.mimo-model.com/v1",
+        "vertex-ai": "https://aiplatform.googleapis.com/v1",
+        "qwen-oauth": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }
+
+    # Friendly aliases for the menu labels the user pasted.
+    PROVIDER_ALIASES = {
+        "nous portal": "nous", "fireworks ai": "fireworks",
+        "openrouter": "openrouter", "mixture of agents": "mixture-of-agents",
+        "novitaai": "novita", "lm studio": "lm-studio",
+        "anthropic": "anthropic", "openai": "openai", "qwen cloud": "qwen",
+        "qwen dashscope": "qwen", "xai grok": "xai-grok",
+        "xiaomi mimo": "xiaomi-mimo", "tencent tokenhub": "tencent-tokenhub",
+        "nvidia nim": "nvidia-nim", "github copilot": "github-copilot",
+        "hugging face": "huggingface", "google ai studio": "google-ai-studio",
+        "google vertex ai": "vertex-ai", "deepseek": "deepseek",
+        "z.ai / glm": "zai-glm", "kimi / moonshot": "kimi-moonshot",
+        "stepfun step plan": "stepfun", "minimax": "minimax",
+        "ollama cloud": "ollama-cloud", "arcee ai": "arcee",
+        "gmi cloud": "gmi-cloud", "kilo code": "kilo-code",
+        "opencode": "opencode", "aws bedrock": "aws-bedrock",
+        "azure foundry": "azure-foundry", "alibaba coding": "alibaba-coding",
+        "custom": "custom", "deepinfra": "deepinfra",
+        "upstage": "upstage", "configure auxiliary models": "custom",
+    }
 
     def __init__(self, root: Path | None = None):
         self.root = Path(root) if root else ROOT if (ROOT := Path(__file__).resolve().parent.parent) else Path.cwd()
@@ -1121,12 +1203,20 @@ class ConfigTool(Tool):
         self._cfg_path().write_text(json.dumps(d, indent=2))
 
     def run(self, arg: str) -> dict:
+        # The agent emits "config get" / "config set ..." — strip our own name.
         arg = (arg or "").strip().strip("`\"'")
+        if arg.lower().startswith("config"):
+            arg = arg[len("config"):].strip()
         if not arg or arg.lower().startswith("get"):
             cfg = self._load()
             return {"ok": True, "mode": "get",
                     "config": cfg,
                     "provider_presets": list(self.PROVIDERS)}
+        if arg.lower().startswith("providers"):
+            # enumerate the available provider presets (the selection menu)
+            return {"ok": True, "mode": "providers",
+                    "providers": sorted(self.PROVIDERS.keys()),
+                    "aliases": self.PROVIDER_ALIASES}
 
         if arg.lower().startswith("set"):
             rest = arg[3:].strip()
@@ -1153,10 +1243,13 @@ class ConfigTool(Tool):
             elif key == "fallback_models":
                 value = [v.strip() for v in value.split(",") if v.strip()]
             elif key == "provider":
-                if value not in self.PROVIDERS:
+                # resolve friendly alias (e.g. "nous portal") -> canonical
+                canon = self.PROVIDER_ALIASES.get(value.strip().lower(), value)
+                if canon not in self.PROVIDERS:
                     return {"ok": False,
                             "error": f"unknown provider '{value}'. "
-                                     f"known: {', '.join(self.PROVIDERS)}"}
+                                     f"known: {', '.join(sorted(self.PROVIDERS))}"}
+                value = canon
                 # adopt the preset endpoint unless a custom base_url is set
                 if value != "custom" and (cfg.get("base_url") in (None, "")
                                           or cfg.get("base_url")
@@ -1258,7 +1351,11 @@ class UpgradeTool(Tool):
              "upgrade_code rollback <backup-name>")
 
     def run(self, arg: str) -> dict:
+        # The agent emits "upgrade_code list" / "upgrade_code <repo>" — strip
+        # our own name so the subcommand parser sees just the subcommand.
         arg = (arg or "").strip().strip("`\"'")
+        if arg.lower().startswith("upgrade_code"):
+            arg = arg[len("upgrade_code"):].strip()
         from pathlib import Path as _P
         script = _P(__file__).resolve().parent.parent / "sara_upgrade.py"
         if not script.exists():

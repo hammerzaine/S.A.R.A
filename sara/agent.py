@@ -19,11 +19,42 @@ ROOT = Path(__file__).resolve().parent.parent
 SOUL = ROOT / "SOUL.md"
 # Provider presets — base_url is the OpenAI-compatible /v1 endpoint.
 PROVIDERS = {
-    "ollama":    "http://127.0.0.1:11434/v1",
-    "openai":    "https://api.openai.com/v1",
-    "openrouter":"https://openrouter.ai/api/v1",
-    "localai":   "http://127.0.0.1:8080/v1",
-    "custom":    "",   # user supplies full base_url
+    "ollama": "http://127.0.0.1:11434/v1",
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "localai": "http://127.0.0.1:8080/v1",
+    "custom": "",
+    "nous": "https://portal.nousresearch.com/v1",
+    "fireworks": "https://api.fireworks.ai/inference/v1",
+    "novita": "https://api.novita.ai/v3/openai",
+    "ollama-cloud": "https://api.ollama.com/v1",
+    "deepinfra": "https://api.deepinfra.com/v1/openai",
+    "deepseek": "https://api.deepseek.com/v1",
+    "zai-glm": "https://open.bigmodel.cn/api/paas/v4",
+    "kimi-moonshot": "https://api.moonshot.cn/v1",
+    "stepfun": "https://api.stepfun.com/v1",
+    "minimax": "https://api.minimax.io/v1",
+    "arcee": "https://api.arcee.ai/v1",
+    "gmi-cloud": "https://api.gmi-serving.com/v1",
+    "kilo-code": "https://aider.kilocode.ai/v1",
+    "opencode": "https://api.opencode.ai/v1",
+    "alibaba-coding": "https://api.aliyun.com/v1",
+    "tencent-tokenhub": "https://tokenhub.tencentmaas.com/v1",
+    "nvidia-nim": "https://integrate.api.nvidia.com/v1",
+    "huggingface": "https://router.huggingface.co/v1",
+    "google-ai-studio": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "xai-grok": "https://api.x.ai/v1",
+    "anthropic": "https://api.anthropic.com/v1",
+    "aws-bedrock": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "azure-foundry": "https://YOUR-RESOURCE.openai.azure.com",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "upstage": "https://api.upstage.ai/v1/solar",
+    "mixture-of-agents": "",
+    "lm-studio": "http://127.0.0.1:1234/v1",
+    "github-copilot": "https://api.githubcopilot.com",
+    "xiaomi-mimo": "https://api.mimo-model.com/v1",
+    "vertex-ai": "https://aiplatform.googleapis.com/v1",
+    "qwen-oauth": "https://dashscope.aliyuncs.com/compatible-mode/v1",
 }
 DEFAULT_CONFIG = {
     "provider": "ollama",
@@ -480,6 +511,9 @@ class Sara:
             "i am unable to access",
             "i am not able to access",
             "i can not assist",
+            "i cannot assist with that",
+            "i can not assist with that",
+            "unable to assist with that",
             "i am unable to browse",
             "no internet access",
             "i can not browse",
@@ -735,7 +769,7 @@ class Sara:
         # server logs" type requests that mean something else). Match against
         # the ORIGINAL message to preserve path casing (low was lowercased).
         import re as _re
-        pm = _re.search(r"(/[~\\w./-]+\\.(?:png|jpe?g|gif|webp|bmp))",
+        pm = _re.search(r"(/[~\w./-]+\.(?:png|jpe?g|gif|webp|bmp))",
                         user_msg)
         if not pm:
             return None
@@ -768,6 +802,34 @@ class Sara:
                        user_msg.lower())
         branch = bm.group(1) if bm else "main"
         return f"{url} {branch}"
+
+    def _route_identity(self, user_msg: str) -> str | None:
+        """Deterministic identity router.
+
+        Returns a non-None sentinel when the user is asking WHO S.A.R.A is
+        (or telling her she got her identity wrong). Identity is a HARD fact
+        that must never be web-searched, fabricated, or safety-collapsed. When
+        this fires, ask() returns a fixed, correct self-introduction without
+        ever calling the model. Returns None for everything else.
+        """
+        import re as _re
+        m = user_msg.lower().strip()
+        # Pure identity questions.
+        if any(p in m for p in ("who are you", "what are you", "who is sara",
+                                "who's sara", "whos sara", "who is s.a.r.a",
+                                "tell me about yourself", "what is your name",
+                                "what's your name", "whats your name",
+                                "are you sara", "are you an ai", "introduce yourself",
+                                "your identity", "identify yourself")):
+            return "identity"
+        # "you asked who I was" / "that's not true - I can just write it" style
+        # identity-correction / confusion from the user -> still identity, never
+        # a tool task. Catches both word orders: "who was i" and "who I was".
+        if _re.search(r"\b(who (am i|was i)|who i (am|was)|you'?re (not|wrong)"
+                      r"|that's not true|you (forgot|got|have).{0,20}"
+                      r"(identity|name|wrong)|i asked .{0,20} who)\b", m):
+            return "identity"
+        return None
 
     def ask(self, user_msg: str) -> str:
         c = self.console
@@ -866,6 +928,20 @@ class Sara:
             else:
                 return (f"Upgrade did not complete: "
                         f"{res.get('error') or (res.get('output') or '')[:400]}")
+
+        # DETERMINISTIC IDENTITY ROUTER — when the user asks WHO she is, answer
+        # from SOUL.md + PROTOCOL, never from the fragile 3B model and NEVER via
+        # the web-search backstop (which used to turn "who are you" into a search
+        # for the album "Who Are You" by The Who). Identity is a HARD fact: the
+        # model must not be allowed to fabricate, web-search, or safety-collapse
+        # on it. Bypassed entirely off the model. (Two-layer pattern.)
+        routed_who = self._route_identity(user_msg)
+        if routed_who:
+            return ("I'm S.A.R.A — Smart AI Resource Assistant. I'm a local AI "
+                    "agent running on this machine with real tools (files, shell, "
+                    "web, SSH, and a database), not a chatbot. I talk to you as a "
+                    "peer, act on what you ask, and remember what we've worked on. "
+                    "Ask me to wrangle something and I'll sort it.")
 
         final = ""
         used_tool = False
