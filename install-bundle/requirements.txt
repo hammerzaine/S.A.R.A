@@ -1,0 +1,7 @@
+# S.A.R.A install bundle — Python dependencies
+# Core agent + webapp. Pinned to ranges tested on the build host
+# (Python 3.10+; works on 3.10/3.11/3.12).
+fastapi>=0.100,<0.200
+uvicorn>=0.20,<0.60
+pydantic>=2.0,<3.0
+requests>=2.25,<3.0

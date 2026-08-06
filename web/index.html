@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>S.A.R.A</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#111722; --panel2:#0e1420; --line:#1e2738;
+  --cyan:#3ddbd9; --cyan-d:#1c8c8a; --blue:#54a9ff; --grey:#8a94a6;
+  --grey-d:#5a6478; --amber:#f2a341; --green:#4fd08a; --red:#ff6b6b;
+  --violet:#b48ef2; --gold:#e3b341; --white:#e8edf5;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg); color:var(--white);
+  font:14px/1.6 ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  display:flex; flex-direction:column;
+}
+/* ---------- header ---------- */
+header{
+  border-bottom:1px solid var(--line); background:var(--panel);
+  padding:14px 22px; display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+}
+.brand{font-size:20px; letter-spacing:.34em; color:var(--cyan); font-weight:700}
+.tag{color:var(--grey); font-size:12px; letter-spacing:.05em}
+.spacer{flex:1}
+.pill{
+  font-size:12px; color:var(--grey);
+  border:1px solid var(--line); border-radius:999px; padding:4px 12px;
+}
+.pill b{color:var(--violet); font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px}
+.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+.off{background:var(--red);box-shadow:0 0 8px var(--red)}
+/* ---------- layout ---------- */
+main{flex:1; display:flex; min-height:0}
+#side{
+  width:310px; border-right:1px solid var(--line); background:var(--panel2);
+  overflow-y:auto; padding:18px 16px; flex-shrink:0;
+}
+#side h3{
+  margin:0 0 10px; font-size:11px; letter-spacing:.18em; color:var(--amber);
+  text-transform:uppercase; font-weight:700;
+}
+#side h3.v{color:var(--violet)}
+#side h3.g{color:var(--gold)}
+.sk{padding:8px 0; border-bottom:1px dashed var(--line)}
+.sk .n{color:var(--violet); font-weight:600}
+.sk .u{float:right; color:var(--gold); font-size:11px}
+.sk .u.zero{color:var(--grey-d)}
+.sk .d{color:var(--grey); font-size:12px; margin-top:3px}
+.more{color:var(--gold); font-style:italic; font-size:12px; padding:10px 0;
+      cursor:pointer; user-select:none}
+.more:hover{text-decoration:underline}
+.fact{color:var(--gold); font-size:12px; padding:6px 0;
+      border-bottom:1px dashed var(--line)}
+.cmd{font-size:12px; padding:3px 0; color:var(--grey)}
+.cmd b{color:var(--cyan); font-weight:600; display:inline-block; min-width:82px}
+/* ---------- chat ---------- */
+#chatwrap{flex:1; display:flex; flex-direction:column; min-width:0}
+#chat{flex:1; overflow-y:auto; padding:26px 30px; scroll-behavior:smooth}
+.turn{margin-bottom:26px; max-width:940px}
+.who{
+  font-size:11px; letter-spacing:.16em; text-transform:uppercase;
+  margin-bottom:7px; display:flex; align-items:center; gap:10px;
+}
+.who::after{content:"";flex:1;height:1px;background:var(--line)}
+.you .who{color:var(--blue)}
+.sara .who{color:var(--cyan)}
+.you .body{color:var(--blue)}
+.sara .body{color:var(--cyan); white-space:pre-wrap; word-break:break-word}
+/* process channels — same colour code as the terminal */
+.ev{margin:5px 0 5px 2px; font-size:13px; display:flex; gap:9px}
+.ev .g{flex-shrink:0; width:16px; text-align:center}
+.think{color:var(--grey); font-style:italic}
+.act{color:var(--amber)}
+.act .arg{color:var(--amber); opacity:.62; margin-left:6px}
+.ok{color:var(--green)}
+.bad{color:var(--red)}
+.learned{
+  color:var(--violet); border-left:2px solid var(--violet);
+  padding:7px 12px; margin:10px 0; background:rgba(180,142,242,.07);
+}
+.learned b{letter-spacing:.1em}
+.truth{
+  color:var(--gold); background:rgba(227,179,65,.07);
+  border-left:2px solid var(--gold); padding:10px 13px; margin:9px 0;
+  white-space:pre-wrap; font-size:13px; word-break:break-word;
+}
+/* ---------- composer ---------- */
+#composer{
+  border-top:1px solid var(--line); background:var(--panel);
+  padding:14px 20px; display:flex; gap:12px; align-items:flex-end;
+}
+#msg{
+  flex:1; resize:none; background:var(--panel2); color:var(--white);
+  border:1px solid var(--line); border-radius:9px; padding:11px 14px;
+  font:inherit; min-height:44px; max-height:190px; outline:none;
+}
+#msg:focus{border-color:var(--cyan-d)}
+#send{
+  background:var(--cyan); color:#04212a; border:0; border-radius:9px;
+  padding:12px 22px; font:inherit; font-weight:700; cursor:pointer;
+}
+#send:disabled{opacity:.4; cursor:not-allowed}
+#gear{background:var(--panel2); color:var(--cyan); border:1px solid var(--line);
+  border-radius:9px; width:38px; height:38px; font-size:18px; cursor:pointer}
+#gear:hover{border-color:var(--cyan-d)}
+#settings{
+  background:var(--panel); border-bottom:1px solid var(--line);
+  padding:16px 22px; display:flex; flex-direction:column; gap:10px;
+}
+#settings.hidden{display:none}
+.setrow{display:flex; align-items:center; gap:12px}
+.setrow label{width:120px; color:var(--grey); font-size:12px}
+.setrow input[type=text], .setrow input:not([type]), .setrow select{
+  flex:1; background:var(--panel2); color:var(--white);
+  border:1px solid var(--line); border-radius:7px; padding:8px 10px; font:inherit;
+}
+.setrow input[type=password]{flex:1; background:var(--panel2); color:var(--white);
+  border:1px solid var(--line); border-radius:7px; padding:8px 10px; font:inherit}
+#settings button{background:var(--cyan); color:#04212a; border:0; border-radius:7px;
+  padding:8px 14px; font:inherit; font-weight:700; cursor:pointer}
+.cfgmsg{color:var(--green); font-size:12px; margin-left:8px}
+.hint{color:var(--grey-d); font-size:11px; padding:0 20px 10px}
+.spin{color:var(--grey); font-style:italic}
+::-webkit-scrollbar{width:9px}
+::-webkit-scrollbar-thumb{background:var(--line); border-radius:9px}
+@media(max-width:760px){#side{display:none}}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="brand">S.A.R.A</div>
+    <div class="tag">Smart AI Research Assistant · v<span id="ver">—</span></div>
+  </div>
+  <div class="spacer"></div>
+  <div class="pill"><span id="dot" class="dot off"></span><span id="state">connecting</span></div>
+  <div class="pill">provider <b id="prov">—</b></div>
+  <div class="pill">model <b id="model">—</b></div>
+  <div class="pill">skills <b id="nskills">0</b></div>
+  <div class="pill">memories <b id="nfacts">0</b></div>
+  <button id="gear" title="Settings">⚙</button>
+</header>
+
+<div id="settings" class="hidden">
+  <div class="setrow"><label>Provider</label>
+    <select id="setProvider"></select></div>
+  <div class="setrow"><label>Base URL</label>
+    <input id="setUrl" placeholder="http://127.0.0.1:11434/v1"></div>
+  <div class="setrow"><label>API key</label>
+    <input id="setKey" type="password" placeholder="(none for local)"></div>
+  <div class="setrow"><label>Model</label>
+    <input id="setModel" placeholder="qwen2.5:7b-instruct-q4_K_M"></div>
+  <div class="setrow"><label>Offline (no web)</label>
+    <input id="setOffline" type="checkbox"></div>
+  <div class="setrow">
+    <button id="listModels">List models</button>
+    <select id="modelPick" style="flex:1"></select>
+  </div>
+  <div class="setrow">
+    <button id="saveCfg">Save settings</button>
+    <span id="cfgMsg" class="cfgmsg"></span>
+  </div>
+</div>
+
+<main>
+  <aside id="side">
+    <h3 class="v">Skills she's taught herself</h3>
+    <div id="skills"></div>
+    <div style="height:22px"></div>
+    <h3 class="g">What she remembers</h3>
+    <div id="facts"></div>
+    <div style="height:22px"></div>
+    <h3>Commands</h3>
+    <div id="cmds">
+      <div class="cmd"><b>/skills</b> full skill list</div>
+      <div class="cmd"><b>/memory</b> what she remembers</div>
+      <div class="cmd"><b>/status</b> model + connection</div>
+      <div class="cmd"><b>/forget</b> drop a fact</div>
+      <div class="cmd"><b>/rename</b> rename a skill</div>
+      <div class="cmd"><b>/clear</b> clear this chat</div>
+    </div>
+    <div style="height:22px"></div>
+    <h3>Colour key</h3>
+    <div class="cmd" style="color:var(--cyan)">■ her answer</div>
+    <div class="cmd" style="color:var(--blue)">■ you</div>
+    <div class="cmd" style="color:var(--grey)">■ her reasoning</div>
+    <div class="cmd" style="color:var(--amber)">■ an action she's taking</div>
+    <div class="cmd" style="color:var(--green)">■ tool succeeded</div>
+    <div class="cmd" style="color:var(--red)">■ tool failed</div>
+    <div class="cmd" style="color:var(--gold)">■ real data from a tool</div>
+    <div class="cmd" style="color:var(--violet)">■ something she learned</div>
+  </aside>
+
+  <div id="chatwrap">
+    <div id="chat"></div>
+    <div id="composer">
+      <textarea id="msg" rows="1" placeholder="Ask her something…  (↑ / ↓ for history, Enter to send)"></textarea>
+      <button id="send">Send</button>
+    </div>
+    <div class="hint">Enter sends · Shift+Enter newline · ↑ ↓ scroll through previous messages</div>
+  </div>
+</main>
+
+<script>
+const $  = s => document.querySelector(s);
+const chat = $("#chat"), msg = $("#msg"), send = $("#send");
+
+/* ---------- command history (↑ / ↓) ---------- */
+const HKEY = "sara.history";
+let hist = [];
+try { hist = JSON.parse(localStorage.getItem(HKEY) || "[]"); } catch(e){ hist = []; }
+let hidx = hist.length;      // points one PAST the newest entry
+let draft = "";              // what you were typing before you started scrolling
+
+function pushHistory(text){
+  if(!text) return;
+  if(hist[hist.length-1] !== text) hist.push(text);
+  if(hist.length > 300) hist = hist.slice(-300);
+  localStorage.setItem(HKEY, JSON.stringify(hist));
+  hidx = hist.length;
+  draft = "";
+}
+function caretOnFirstLine(){
+  return msg.value.lastIndexOf("\n", Math.max(0, msg.selectionStart - 1)) === -1;
+}
+function caretOnLastLine(){
+  return msg.value.indexOf("\n", msg.selectionStart) === -1;
+}
+msg.addEventListener("keydown", e => {
+  if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); submit(); return; }
+
+  if(e.key === "ArrowUp" && caretOnFirstLine()){
+    if(hidx === hist.length) draft = msg.value;   // remember the unsent draft
+    if(hidx > 0){
+      e.preventDefault();
+      hidx--;
+      msg.value = hist[hidx];
+      autosize();
+      requestAnimationFrame(() => msg.setSelectionRange(msg.value.length, msg.value.length));
+    }
+  } else if(e.key === "ArrowDown" && caretOnLastLine()){
+    if(hidx < hist.length){
+      e.preventDefault();
+      hidx++;
+      msg.value = hidx === hist.length ? draft : hist[hidx];
+      autosize();
+      requestAnimationFrame(() => msg.setSelectionRange(msg.value.length, msg.value.length));
+    }
+  }
+});
+
+function autosize(){
+  msg.style.height = "auto";
+  msg.style.height = Math.min(msg.scrollHeight, 190) + "px";
+}
+msg.addEventListener("input", autosize);
+
+/* ---------- rendering ---------- */
+function turn(cls, who){
+  const d = document.createElement("div");
+  d.className = "turn " + cls;
+  d.innerHTML = `<div class="who">${who}</div><div class="body"></div>`;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d.querySelector(".body");
+}
+function ev(parent, cls, glyph, text, extra){
+  const d = document.createElement("div");
+  d.className = "ev " + cls;
+  d.innerHTML = `<span class="g">${glyph}</span><span></span>`;
+  const s = d.querySelector("span:last-child");
+  s.textContent = text;
+  if(extra){
+    const x = document.createElement("span");
+    x.className = "arg"; x.textContent = extra;
+    s.appendChild(x);
+  }
+  parent.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+/* Ground-truth blocks (tool output) get the gold treatment. */
+function renderAnswer(node, text){
+  node.textContent = "";
+  const lines = String(text).split("\n");
+  let buf = [], inTruth = false;
+  const flush = () => {
+    if(!buf.length) return;
+    const d = document.createElement("div");
+    if(inTruth){ d.className = "truth"; }
+    d.textContent = buf.join("\n");
+    node.appendChild(d);
+    buf = [];
+  };
+  for(const l of lines){
+    const t = /^(Contents of |\d+ match\(es\):)/.test(l.trim());
+    const cont = inTruth && (l.startsWith("  ") || l.trim() === "");
+    if(t){ flush(); inTruth = true; buf.push(l); }
+    else if(cont){ buf.push(l); }
+    else { if(inTruth){ flush(); inTruth = false; } buf.push(l); }
+  }
+  flush();
+}
+
+/* ---------- talking to her ---------- */
+let busy = false;
+async function submit(){
+  const text = msg.value.trim();
+  if(!text || busy) return;
+
+  if(text === "/clear"){ chat.innerHTML=""; pushHistory(text); msg.value=""; autosize(); return; }
+  if(text === "/skills" || text === "/memory" || text === "/status"){
+    pushHistory(text); msg.value=""; autosize(); await refresh(true, text); return;
+  }
+  if(text.startsWith("/rename ")){
+    pushHistory(text); msg.value=""; autosize();
+    const p = text.slice(8).trim().split(/\s+/);
+    const b = turn("sara","S.A.R.A");
+    if(p.length !== 2){ b.textContent = "usage: /rename <old-name> <new-name>"; return; }
+    const r = await fetch("/api/rename",{method:"POST",headers:{"Content-Type":"application/json"},
+                          body:JSON.stringify({old:p[0], new:p[1]})});
+    const j = await r.json();
+    b.textContent = j.message;
+    refresh(); return;
+  }
+  if(text.startsWith("/forget ")){
+    pushHistory(text); msg.value=""; autosize();
+    const r = await fetch("/api/forget",{method:"POST",headers:{"Content-Type":"application/json"},
+                          body:JSON.stringify({message:text.slice(8)})});
+    const j = await r.json();
+    const b = turn("sara","S.A.R.A"); b.textContent = `Dropped ${j.dropped} fact(s).`;
+    refresh(); return;
+  }
+
+  pushHistory(text);
+  turn("you","you").textContent = text;
+  msg.value = ""; autosize();
+
+  busy = true; send.disabled = true;
+  const body = turn("sara","S.A.R.A");
+  const spin = document.createElement("div");
+  spin.className = "spin"; spin.textContent = "thinking…";
+  body.appendChild(spin);
+
+  try{
+    const res = await fetch("/api/ask",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:text})});
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for(const p of parts){
+        const line = p.split("\n").find(x => x.startsWith("data: "));
+        if(!line) continue;
+        const e = JSON.parse(line.slice(6));
+        if(e.type === "think")   ev(body,"think","·",e.text);
+        if(e.type === "act")     ev(body,"act","▸",e.tool,"  "+(e.detail||""));
+        if(e.type === "result")  ev(body, e.ok?"ok":"bad", e.ok?"✓":"✗", e.text);
+        if(e.type === "warn")    ev(body,"bad","!",e.text);
+        if(e.type === "error")   ev(body,"bad","✗",e.text);
+        if(e.type === "learned"){
+          const d = document.createElement("div");
+          d.className = "learned";
+          d.innerHTML = `<b>✦ LEARNED</b> — ${e.what}`;
+          if(e.detail){ const s=document.createElement("div"); s.textContent=e.detail; d.appendChild(s); }
+          body.appendChild(d);
+        }
+        if(e.type === "answer"){
+          spin.remove();
+          const a = document.createElement("div");
+          body.appendChild(a);
+          renderAnswer(a, e.text);
+        }
+        chat.scrollTop = chat.scrollHeight;
+      }
+    }
+  }catch(err){
+    ev(body,"bad","✗","connection lost: "+err.message);
+  }finally{
+    spin.remove();
+    busy = false; send.disabled = false; msg.focus();
+    refresh();
+  }
+}
+send.addEventListener("click", submit);
+
+/* ---------- settings panel ---------- */
+const gear = $("#gear"), settings = $("#settings");
+gear.onclick = () => settings.classList.toggle("hidden");
+
+async function loadConfig(){
+  const c = await (await fetch("/api/config")).json();
+  const cfg = c.config || {};
+  const presets = c.provider_presets || ["ollama","openai","openrouter","localai","custom"];
+  const sel = $("#setProvider");
+  sel.innerHTML = presets.map(p=>`<option value="${p}">${p}</option>`).join("");
+  sel.value = cfg.provider || "ollama";
+  $("#setUrl").value    = cfg.base_url || "";
+  $("#setKey").value    = cfg.api_key || "";
+  $("#setModel").value  = cfg.model || "";
+  $("#setOffline").checked = !!cfg.no_research;
+}
+loadConfig();
+
+async function saveCfg(){
+  const set = async (k,v) => {
+    const r = await fetch("/api/config/set",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify({key:k,value:v})});
+    return r.json();
+  };
+  await set("provider", $("#setProvider").value);
+  await set("base_url", $("#setUrl").value.trim());
+  await set("api_key",  $("#setKey").value.trim());
+  await set("model",    $("#setModel").value.trim());
+  await set("no_research", $("#setOffline").checked);
+  const j = await set("model", $("#setModel").value.trim());
+  $("#cfgMsg").textContent = j.ok ? "✓ saved — applies next turn" : "error: "+j.error;
+  setTimeout(()=>$("#cfgMsg").textContent="", 4000);
+  refresh();
+}
+$("#saveCfg").onclick = saveCfg;
+
+$("#listModels").onclick = async () => {
+  const pick = $("#modelPick");
+  pick.innerHTML = "<option>loading…</option>";
+  try{
+    const r = await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:"list_models"})});
+    const dec = new TextDecoder(); let buf="", models=[];
+    const reader = r.body.getReader();
+    while(true){ const {value,done}=await reader.read(); if(done) break;
+      buf += dec.decode(value,{stream:true});
+      for(const p of buf.split("\n\n")){ const l=p.split("\n").find(x=>x.startsWith("data: "));
+        if(!l) continue; const e=JSON.parse(l.slice(6));
+        if(e.type==="result"){ const m=(e.text||"").match(/models @ [^\n]*: (.*)/); if(m) models=m[1].split(",").map(s=>s.replace(/[\[\]]/g,"").trim()); } } }
+    if(models.length){ pick.innerHTML = models.map(m=>`<option>${m}</option>`).join("");
+      pick.onchange = () => { $("#setModel").value = pick.value; }; }
+    else pick.innerHTML = "<option>no models reported</option>";
+  }catch(e){ pick.innerHTML = "<option>error: "+e.message+"</option>"; }
+};
+
+/* ---------- status / sidebar ---------- */
+let showAll = false;
+async function refresh(announce, which){
+  try{
+    const s = await (await fetch("/api/status")).json();
+    $("#model").textContent  = s.model;
+    $("#prov").textContent   = s.provider;
+    $("#ver").textContent    = s.version;
+    $("#nskills").textContent= s.skill_count;
+    $("#nfacts").textContent = s.facts;
+    $("#state").textContent  = s.online ? "online" : "offline";
+    $("#dot").className = "dot " + (s.online ? "on" : "off");
+
+    const box = $("#skills"); box.innerHTML = "";
+    const shown = showAll ? s.skills : s.skills.slice(0,10);
+    if(!s.skills.length){
+      box.innerHTML = '<div class="cmd">nothing yet — give her a problem</div>';
+    }
+    for(const k of shown){
+      const d = document.createElement("div"); d.className = "sk";
+      d.innerHTML = `<span class="u ${k.uses?'':'zero'}">${k.uses}×</span>`+
+                    `<span class="n"></span><div class="d"></div>`;
+      d.querySelector(".n").textContent = k.name;
+      d.querySelector(".d").textContent = k.description;
+      box.appendChild(d);
+    }
+    const extra = s.skills.length - 10;
+    if(extra > 0 && !showAll){
+      const m = document.createElement("div"); m.className="more";
+      m.textContent = `+${extra} more skill${extra===1?"":"s"} — click to show all`;
+      m.onclick = () => { showAll = true; refresh(); };
+      box.appendChild(m);
+    } else if(showAll && s.skills.length > 10){
+      const m = document.createElement("div"); m.className="more";
+      m.textContent = "show fewer";
+      m.onclick = () => { showAll = false; refresh(); };
+      box.appendChild(m);
+    }
+
+    const fb = $("#facts"); fb.innerHTML = "";
+    if(!s.memories.length) fb.innerHTML = '<div class="cmd">nothing yet</div>';
+    for(const f of s.memories){
+      const d = document.createElement("div"); d.className="fact";
+      d.textContent = "▪ " + f; fb.appendChild(d);
+    }
+
+    if(announce){
+      const b = turn("sara","S.A.R.A");
+      if(which === "/skills"){
+        renderAnswer(b, s.skills.length
+          ? s.skills.map(k=>`${k.name}  (${k.uses}×)\n    ${k.description}`).join("\n\n")
+          : "I haven't taught myself anything yet.");
+      } else if(which === "/memory"){
+        renderAnswer(b, s.memories.length
+          ? s.memories.map(f=>"▪ "+f).join("\n") : "I don't remember anything yet.");
+      } else {
+        renderAnswer(b, `model     ${s.model}\nonline    ${s.online?"yes":"no"}\n`+
+                        `turns     ${s.turns}\nfacts     ${s.facts}\nskills    ${s.skill_count}\n`+
+                        `tools     ${s.tools.join(", ")}`);
+      }
+    }
+  }catch(e){
+    $("#state").textContent = "offline";
+    $("#dot").className = "dot off";
+  }
+}
+refresh();
+setInterval(() => { if(!busy) refresh(); }, 15000);
+msg.focus();
+</script>
+</body>
+</html>

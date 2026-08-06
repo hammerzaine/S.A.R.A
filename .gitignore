@@ -1,0 +1,9 @@
+# Local state / secrets — never commit
+credentials.json
+config.json
+upgrade_state.json
+data/
+backups/
+__pycache__/
+*.pyc
+*.bak*
