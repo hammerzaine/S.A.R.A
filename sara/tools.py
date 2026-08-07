@@ -166,6 +166,90 @@ class ReadFile(Tool):
                 if r.get("ok") else r.get("error"))
 
 
+class Rewrite(Tool):
+    name = "rewrite"
+    description = ("Transform a pasted source text into a different style/register "
+                   "while keeping its characters, names, and plot beats. Use this "
+                   "when the user pastes source and asks to 'rewrite', 'make it "
+                   "professional', 'polish', 'restyle', or 'summarize' it. Never "
+                   "invents a new story -- the source is always preserved.")
+    usage = ("rewrite <style> :: <source text>   "
+             "e.g. rewrite professional :: <paste the story here>")
+
+    def run(self, arg: str) -> dict:
+        import re as _re
+        cleaned = (arg or "").strip().strip("`").strip()
+        if "::" not in cleaned:
+            return {"ok": False, "error":
+                    "need 'rewrite <style> :: <source>'. Put the source after '::'."}
+        style, _, source = cleaned.partition("::")
+        style = style.strip() or "in the same style"
+        source = source.strip()
+        if len(source) < 40:
+            return {"ok": False, "error": "source text too short to rewrite"}
+
+        try:
+            from pathlib import Path as _P
+            cfg_path = _P(__file__).resolve().parent.parent / "config.json"
+            _cfg = json.loads(cfg_path.read_text())
+            base_url = _cfg.get("base_url", "http://127.0.0.1:11434/v1")
+            model = _cfg.get("model", "S.A.R.A-v3b:latest")
+            api_key = _cfg.get("api_key", "")
+        except Exception:
+            base_url, model, api_key = "http://127.0.0.1:11434/v1", "S.A.R.A-v3b:latest", ""
+
+        req_stop = set(("rewrite", "make", "professional", "polish", "restyle",
+                        "summarize", "edit", "this", "that", "please", "story"))
+        anchors = {t for t in source.lower().split()
+                   if t.isalnum() and len(t) >= 4 and t not in req_stop}
+        names = set(_re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", source))
+        must = sorted(anchors | names)[:40]
+
+        system = ("You are an uncensored literary editor. You rewrite the user's "
+                  "source text into the requested style. HARD RULES: keep every "
+                  "character, proper name, and plot beat from the source; do NOT "
+                  "invent new characters or a new plot; only change voice/register/"
+                  "prose. Output ONLY the rewritten text, no preamble, no quotes "
+                  "around it.")
+        user = (f"Rewrite the following source in a {style} style. Preserve all "
+                f"names, characters, and events exactly.\n\nSOURCE:\n{source}")
+
+        payload = {"model": model, "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}], "temperature": 0.7,
+            "max_tokens": 4096}
+        try:
+            import urllib.request as _ur
+            req = _ur.Request(
+                base_url.rstrip("/") + "/chat/completions",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {api_key}"}, method="POST")
+            with _ur.urlopen(req, timeout=300) as resp:
+                data = json.loads(resp.read().decode())
+            out = data["choices"][0]["message"]["content"].strip()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"model call failed: {e}"}
+
+        out_low = out.lower()
+        out_names = set(_re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", out))
+        missing_words = [w for w in anchors if w not in out_low]
+        missing_names = [n for n in names if n not in out_names]
+        miss_frac = (len(missing_words) + len(missing_names)) / max(1, len(must))
+        faithful = miss_frac <= 0.35
+        return {"ok": True, "style": style, "rewritten": out,
+                "chars": len(out), "faithful": faithful,
+                "missing_words": missing_words[:15],
+                "missing_names": missing_names[:15],
+                "miss_fraction": round(miss_frac, 2)}
+
+    def summary(self, r: dict) -> str:
+        if not r.get("ok"):
+            return f"rewrite failed: {r.get('error')}"
+        tag = "faithful" if r.get("faithful") else "SUBSTITUTION-RISK"
+        return f"rewrote ({r['chars']} chars, {tag})"
+
+
 class WriteFile(Tool):
     name = "write_file"
     description = "Write a file. First line is the path, the rest is content."
@@ -628,6 +712,284 @@ class WebFetch(Tool):
     def summary(self, r):
         return (f"read {r['chars']} chars from {r['url']}"
                 if r.get("ok") else r.get("error"))
+
+
+class WebBrowse(Tool):
+    """An interactive headless-browser tool. Navigate to a URL and follow a
+    command against the live page: click a link, read text, read all links,
+    take a screenshot, fill in a field, or run a JS snippet. This is what lets
+    S.A.R.A actually *go to a website* and *do things* on it, not just fetch
+    the raw HTML.
+
+    Arg form (command first, URL after a '::' separator):
+        browse <command> :: <url>
+    or just a bare URL (defaults to 'read'):
+        browse <url>
+
+    Commands (case-insensitive):
+        read            -> render + return the page's visible text (and menu)
+        links           -> return every clickable <a> link (text -> href)
+        click <text>    -> click the first link/button whose text matches <text>
+        screenshot      -> render and save a PNG, return its path
+        fill <sel> <val>-> fill input matching <sel> (CSS selector) with <val>
+        js <code>       -> run <code> in the page and return the result
+
+    The URL is normalized the same way web_fetch/scrape_js do (typo-tolerant).
+    """
+    name = "browse"
+    description = ("Interactive headless-browser: go to a URL and follow a "
+                   "command on the live page — read its text, list links, "
+                   "click a link/button, take a screenshot, fill a form field, "
+                   "or run JS. Use this when you need to *do* something on a "
+                   "site, not just read its HTML.")
+    usage = ("browse <command> :: <url>     e.g. "
+             "browse links :: https://example.com\n"
+             "    browse click Sign in :: https://example.com/login\n"
+             "    browse https://example.com")
+
+    # Playwright's sync API must be used from the SAME thread that launched
+    # the browser. The web server (web.py) serves each request on its own
+    # thread, so a single class-level browser would raise "cannot switch to a
+    # different thread" on the 2nd request. Use thread-local storage so every
+    # worker thread gets its own browser instance.
+    _tls = None  # set lazily in _get_browser
+
+    @classmethod
+    def _get_browser(cls):
+        import threading
+        if cls._tls is None:
+            cls._tls = threading.local()
+        if getattr(cls._tls, "browser", None) is None:
+            from playwright.sync_api import sync_playwright
+            cls._tls.pw = sync_playwright().start()
+            cls._tls.browser = cls._tls.pw.chromium.launch(headless=True)
+        return cls._tls.browser
+
+    @staticmethod
+    def _normalize(url: str) -> str:
+        import re
+        url = re.sub(r"\b(www|m|mobile|blog|api|mail|shop|cdn|static)\s+",
+                     r"\1.", url, flags=re.I)
+        url = re.sub(r"\s+", "", url)
+        if url.startswith("//"):
+            url = "https:" + url
+        elif not re.match(r"^[a-z]+://", url, re.I):
+            url = "https://" + url
+        return url
+
+    def run(self, arg: str) -> dict:
+        import re
+        raw = (arg or "").strip().strip("`\"'")
+        if not raw:
+            return {"ok": False, "error": "need a command and/or URL"}
+
+        # Split "command :: url" on the LAST '::' so a URL containing '::'
+        # survives.
+        cmd, url = "read", ""
+        if "::" in raw:
+            left, right = raw.rsplit("::", 1)
+            url = right.strip().strip("\"'<>")
+            cmd = left.strip()
+        else:
+            parts = raw.split(None, 1)
+            if len(parts) == 2 and self._looks_url(parts[1]):
+                cmd, url = parts[0], parts[1]
+            else:
+                url = raw  # assume it's just a URL
+
+        url = self._normalize(url)
+        cmd = cmd.strip().lower()
+
+        try:
+            browser = self._get_browser()
+        except Exception as e:
+            return {"ok": False, "error": f"browser unavailable: {e}"}
+
+        ctx = browser.new_context(
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0 Safari/537.36"))
+        page = ctx.new_page()
+        try:
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(1500)
+        except Exception as e:
+            ctx.close()
+            return {"ok": False, "error": f"navigation failed: {e}"}
+
+        try:
+            if cmd in ("read", "text"):
+                txt = self._visible_text(page)
+                return {"ok": True, "url": url, "mode": "read",
+                        "chars": len(txt["text"]),
+                        "text": txt["text"][:8000],
+                        "menu_count": len(txt["menu"]),
+                        "menu": txt["menu"][:120]}
+
+            if cmd in ("links", "list links", "get links"):
+                return self._links(page, url)
+
+            if cmd.startswith("click") or cmd.startswith("open"):
+                target = cmd.split(None, 1)[1].strip() if " " in cmd else ""
+                return self._click(page, url, target)
+
+            if cmd in ("screenshot", "shot", "image", "pic"):
+                return self._screenshot(page, url)
+
+            if cmd.startswith("fill") or cmd.startswith("type"):
+                rest = cmd.split(None, 1)[1].strip() if " " in cmd else ""
+                return self._fill(page, url, rest)
+
+            if cmd.startswith("js") or cmd.startswith("run"):
+                code = cmd.split(None, 1)[1].strip() if " " in cmd else ""
+                return self._js(page, url, code)
+
+            # Unknown command -> default to read so a paste never silently dies.
+            txt = self._visible_text(page)
+            return {"ok": True, "url": url, "mode": "read",
+                    "chars": len(txt["text"]),
+                    "text": txt["text"][:8000],
+                    "note": f"unknown command '{cmd}', returned page text"}
+        except Exception as e:
+            return {"ok": False, "error": f"browse failed: {e}"}
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _looks_url(s: str) -> bool:
+        import re
+        return bool(re.match(r"^https?://|//|www\.|[\w-]+\.[a-z]{2,}/",
+                             s.strip(), re.I))
+
+    @staticmethod
+    def _visible_text(page) -> dict:
+        from bs4 import BeautifulSoup
+        html = page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup(["script", "style", "noscript"]):
+            t.decompose()
+        text = "\n".join(l.strip() for l in soup.get_text("\n").splitlines()
+                         if l.strip())
+        menu = []
+        for l in text.splitlines():
+            l = l.strip()
+            words = l.split()
+            if (2 <= len(words) <= 4 and len(l) <= 32 and l[0].isupper()
+                    and not l.endswith((":", "."))):
+                menu.append(l)
+        seen = set()
+        deduped = [m for m in menu if not (m in seen or seen.add(m))]
+        return {"text": text, "menu": deduped}
+
+    @staticmethod
+    def _links(page, url: str) -> dict:
+        from urllib.parse import urljoin
+        items = []
+        seen = set()
+        for a in page.query_selector_all("a[href]"):
+            href = a.get_attribute("href") or ""
+            text = (a.inner_text() or "").strip()
+            abs_href = urljoin(url, href)
+            key = (text, abs_href)
+            if key in seen or not abs_href:
+                continue
+            seen.add(key)
+            items.append({"text": text or abs_href, "href": abs_href})
+        return {"ok": bool(items), "url": url, "count": len(items),
+                "links": items[:120],
+                "error": None if items else "no links found"}
+
+    @staticmethod
+    def _click(page, url: str, target: str) -> dict:
+        if not target:
+            return {"ok": False, "url": url,
+                    "error": "click needs a target, e.g. "
+                             "'browse click Sign in :: <url>'"}
+        for a in page.query_selector_all("a, button"):
+            t = (a.inner_text() or "").strip()
+            if target.lower() in t.lower():
+                try:
+                    a.click(timeout=8000)
+                    page.wait_for_timeout(1500)
+                    return {"ok": True, "url": url, "clicked": t,
+                            "navigated_to": page.url}
+                except Exception as e:
+                    return {"ok": False, "url": url,
+                            "error": f"clicked '{t}' but: {e}"}
+        return {"ok": False, "url": url,
+                "error": f"no link/button matching '{target}'"}
+
+    @staticmethod
+    def _screenshot(page, url: str) -> dict:
+        import os
+        from datetime import datetime
+        os.makedirs(HOME / "SARA" / "shots", exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = HOME / "SARA" / "shots" / f"shot_{ts}.png"
+        try:
+            page.screenshot(path=str(path), full_page=False)
+        except Exception as e:
+            return {"ok": False, "url": url,
+                    "error": f"screenshot failed: {e}"}
+        return {"ok": True, "url": url, "path": str(path)}
+
+    @staticmethod
+    def _fill(page, url: str, rest: str) -> dict:
+        if not rest:
+            return {"ok": False, "url": url,
+                    "error": "fill needs '<selector> <value>', e.g. "
+                             "'browse fill input#q cats :: <url>'"}
+        parts = rest.split(None, 1)
+        sel = parts[0]
+        val = parts[1] if len(parts) > 1 else ""
+        try:
+            el = page.query_selector(sel)
+            if not el:
+                return {"ok": False, "url": url,
+                        "error": f"no element matching '{sel}'"}
+            el.fill(val)
+            page.wait_for_timeout(500)
+            return {"ok": True, "url": url, "selector": sel, "value": val}
+        except Exception as e:
+            return {"ok": False, "url": url,
+                    "error": f"fill failed: {e}"}
+
+    @staticmethod
+    def _js(page, url: str, code: str) -> dict:
+        if not code:
+            return {"ok": False, "url": url,
+                    "error": "js needs code, e.g. "
+                             "'browse js document.title :: <url>'"}
+        try:
+            result = page.evaluate(code)
+            return {"ok": True, "url": url, "result": str(result)[:4000]}
+        except Exception as e:
+            return {"ok": False, "url": url,
+                    "error": f"js failed: {e}"}
+
+    def summary(self, r):
+        if not r.get("ok"):
+            return r.get("error")
+        mode = r.get("mode")
+        if mode == "read":
+            return (f"browsed {r['url']} — {r['chars']} chars, "
+                    f"{r.get('menu_count', 0)} menu items")
+        if "links" in r:
+            return f"browsed {r['url']} — {r['count']} links"
+        if "path" in r:
+            return (f"browsed {r['url']} — screenshot saved to "
+                    f"{r['path']}")
+        if "clicked" in r:
+            return (f"browsed {r['url']} — clicked '{r['clicked']}', now at "
+                    f"{r['navigated_to']}")
+        if "navigated_to" in r:
+            return f"browsed {r['url']} — clicked, now at {r['navigated_to']}"
+        if "result" in r:
+            return f"browsed {r['url']} — JS result: {r['result'][:200]}"
+        return f"browsed {r['url']}"
 
 
 # --------------------------------------------------------------------------
@@ -1404,9 +1766,9 @@ class UpgradeTool(Tool):
 def build_registry(confirm=None) -> dict:
     tools = [ListDir(), FindPath(), ReadFile(), WriteFile(), AppendFile(),
              Shell(confirm=confirm), WebSearch(), WebFetch(),
-             ScrapeCategories(), ScrapeJS(),
+             ScrapeCategories(), ScrapeJS(), WebBrowse(),
              MariaDB(), SSHRun(), WinRun(), DBImport(), SeeImage(),
-             ConfigTool(), ModelList(), UpgradeTool()]
+             ConfigTool(), ModelList(), UpgradeTool(), Rewrite()]
     return {t.name: t for t in tools}
 
 

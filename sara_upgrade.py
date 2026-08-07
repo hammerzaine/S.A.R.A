@@ -124,6 +124,11 @@ def backup(label: str | None = None) -> Path:
             rel = p.relative_to(ROOT)
             if rel.parts[0] in ("backups", "__pycache__", ".git"):
                 continue
+            # also skip ANY nested .git (e.g. dist-clean/.git) — git objects
+            # are stored read-only (0444) and must never be backed up or
+            # restored (they break restore with PermissionError). B31.
+            if ".git" in rel.parts:
+                continue
             if rel.name in PROTECTED or any(
                     p.match(pat) for pat in EXCLUDE_NAMES):
                 continue
@@ -157,12 +162,21 @@ def restore(backup_name: str) -> bool:
             if not m.isfile():
                 continue
             rel = Path(m.name)
+            # never restore .git objects (read-only, not needed to run). B31
+            if ".git" in rel.parts:
+                continue
             if rel.parts[0] in ("backups",):
                 continue
             target = ROOT / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             src = tf.extractfile(m)
             if src:
+                # Defensive: git/db files may be read-only in the archive;
+                # ensure the destination is writable before overwriting. B31
+                try:
+                    target.chmod(0o644)
+                except OSError:
+                    pass
                 target.write_bytes(src.read())
     print(f"restored from {backup_name}")
     return True

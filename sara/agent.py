@@ -831,6 +831,114 @@ class Sara:
             return "identity"
         return None
 
+    def _route_url(self, user_msg: str) -> str | None:
+        """Deterministic web-navigation router.
+
+        Returns a ready-to-run `browse` arg when the user pastes a URL (or a
+        "go to <url>" / "open <url>" request) and asks S.A.R.A to do something
+        with it (read it, list its links, click something, screenshot, fill a
+        form, run JS). The fragile 3B model otherwise answers from memory or
+        fails to invoke the website tool, so we extract the command + URL and
+        run browse() directly. Two-layer pattern: real tool + deterministic
+        router.
+
+        Triggers on:
+          - a bare URL in the message, OR
+          - "go to/open/visit/navigate to/browse <url>" + an action word.
+        """
+        import re as _re
+        # Grab the first URL present (http(s)://, //, www., or domain/path).
+        um = _re.search(
+            r"(https?://[^\s]+|//[^\s]+|www\.[^\s]+|[\w-]+\.[a-z]{2,}/[^\s]*)",
+            user_msg)
+        if not um:
+            return None
+        url = um.group(1).strip().rstrip(").,")
+        low = user_msg.lower()
+
+        # Map a plain verb / phrase onto a browse sub-command.
+        cmd = "read"  # default when only a URL is pasted
+        if any(w in low for w in ("list links", "show links", "get links",
+                                  "all links", "the links")):
+            cmd = "links"
+        elif any(w in low for w in ("click", "press", "open the link",
+                                    "tap")):
+            # pull the target word after the verb
+            cm = _re.search(r"(?:click|press|tap|open the link)\s+(.{1,40})",
+                            low)
+            target = cm.group(1).strip() if cm else ""
+            cmd = f"click {target}"
+        elif any(w in low for w in ("screenshot", "take a pic", "take a photo",
+                                    "capture", "screen shot")):
+            cmd = "screenshot"
+        elif any(w in low for w in ("fill", "type into", "enter into",
+                                    "type in")):
+            # fill <selector> <value> — keep whatever follows (best effort)
+            fm = _re.search(r"(?:fill|type into|enter into|type in)\s+(.{1,80})",
+                            low)
+            rest = fm.group(1).strip() if fm else ""
+            cmd = f"fill {rest}"
+        elif any(w in low for w in ("run js", "execute js", "run javascript",
+                                    "run this code", "js ")):
+            jm = _re.search(r"(?:run js|execute js|run javascript|js)\s+(.{1,200})",
+                            low)
+            code = jm.group(1).strip() if jm else ""
+            cmd = f"js {code}"
+        elif any(w in low for w in ("go to", "open", "visit", "navigate to",
+                                    "browse", "load", "fetch", "read",
+                                    "summarise", "summarize", "what is on",
+                                    "what's on", "whats on")):
+            cmd = "read"
+        # Strip any accidental duplication of the URL inside the sub-command
+        # (e.g. "fill input#q cats into https://example.com" would otherwise
+        # carry the URL inside the fill args too). Then tidy dangling filler
+        # words left over after the URL was removed.
+        if url and url in cmd:
+            cmd = cmd.replace(url, " ")
+        cmd = _re.sub(r"\s+", " ", cmd).strip()
+        cmd = _re.sub(r"\s+(into|on|at|the)\s*$", "", cmd).strip()
+        return f"{cmd} :: {url}"
+
+    def _route_rewrite(self, user_msg: str) -> str | None:
+        """Deterministic rewrite router.
+
+        Returns a ready-to-run `rewrite` arg (``<style> :: <source>``) when the
+        user pastes source text and asks to rewrite / make professional / polish /
+        restyle / summarize it. The 3B model garbles long pasted prose and dodges
+        into substitute stories, so we pull the source straight from the message
+        and run the Rewrite tool directly. Mirrors the two-layer pattern used by
+        _route_url / _route_identity: real tool + deterministic router that
+        bypasses the fragile model for the arg-extraction.
+        """
+        import re as _re
+        low = user_msg.lower()
+        if not any(w in low for w in (
+                "rewrite", "make it professional", "make this professional",
+                "make it look professional", "polish", "restyle", "rewrite it",
+                "rewrite this", "clean it up", "like a professional",
+                "rewrite to", "rewrite so", "professional rewrite")):
+            return None
+        # The user almost always pastes the source AFTER the request. Grab the
+        # longer tail: if there's a "::" use it; else take everything past the
+        # first newline or past the request sentence as the source.
+        src = user_msg.strip()
+        if "::" in src:
+            style, _, body = src.partition("::")
+            style = style.replace("rewrite", "").strip() or "professional"
+            return f"{style} :: {body.strip()}"
+        # Split on first line break; whichever side is much longer is the source.
+        if "\n" in src:
+            head, _, tail = src.partition("\n")
+            if len(tail) >= len(head):
+                return f"professional :: {tail.strip()}"
+            # head is longer -> source was pasted before the request sentence
+            return f"professional :: {head.strip()}"
+        # No newline: only fire if there's clearly pasted prose (>120 chars) so
+        # we don't yank a one-line chat request.
+        if len(src) > 120:
+            return f"professional :: {src}"
+        return None
+
     def ask(self, user_msg: str) -> str:
         c = self.console
         self.memory.log("user", user_msg)
@@ -942,6 +1050,73 @@ class Sara:
                     "web, SSH, and a database), not a chatbot. I talk to you as a "
                     "peer, act on what you ask, and remember what we've worked on. "
                     "Ask me to wrangle something and I'll sort it.")
+
+        # DETERMINISTIC WEB-NAVIGATION ROUTER — when the user pastes a link
+        # (or a "go to/open <url>" request) and asks S.A.R.A to do something
+        # with the page, bypass the fragile 3B model and run browse() directly.
+        # This is what makes "paste a URL + tell her what to do" actually work
+        # instead of the model answering from memory. (Two-layer pattern.)
+        # ONLY fires when an explicit web-tool verb is present OR a bare URL is
+        # pasted (so normal chat is untouched). Bypassed entirely off the model.
+        routed_browse = self._route_url(user_msg)
+        if routed_browse:
+            bcmd = routed_browse
+            c.act("browse", bcmd[:120])
+            res = self.tools["browse"].run(bcmd)
+            c.result(self.tools["browse"].summary(res),
+                     ok=bool(res.get("ok")))
+            if not res.get("ok"):
+                return (f"Tried to open that link — error: {res.get('error')}")
+            # Build a plain, factual reply from the real tool result.
+            mode = res.get("mode")
+            if mode == "read":
+                body = res.get("text", "")
+                extra = ""
+                if res.get("menu_count"):
+                    extra = ("\n\nMenu items found: "
+                             + ", ".join(res.get("menu", [])[:20]))
+                return (f"Opened {res['url']} and read the page "
+                        f"({res['chars']} chars):\n\n{body[:6000]}{extra}")
+            if "links" in res:
+                listing = "\n".join(
+                    f"- {i['text']}  ->  {i['href']}" for i in res["links"][:60])
+                return (f"Opened {res['url']} — {res['count']} links:\n\n"
+                        f"{listing}")
+            if "path" in res:
+                return (f"Opened {res['url']} and saved a screenshot to "
+                        f"{res['path']}.")
+            if "clicked" in res:
+                return (f"Opened {res['url']}, clicked '{res['clicked']}', "
+                        f"and landed on {res['navigated_to']}.")
+            if "navigated_to" in res:
+                return (f"Opened {res['url']} — now at {res['navigated_to']}.")
+            if "result" in res:
+                return (f"Opened {res['url']} and ran the code — result:\n\n"
+                        f"{res['result']}")
+            return self.tools["browse"].summary(res)
+
+        # DETERMINISTIC REWRITE ROUTER — when the user pastes source and asks to
+        # rewrite / make professional / polish it, bypass the fragile 3B model
+        # (which garbles long pasted prose and dodges into substitute stories)
+        # and run the Rewrite tool directly. The tool calls the live model with a
+        # tight transform prompt and validates faithfulness (idea #5). The router
+        # extracts the source straight from the message so it can't be mangled.
+        routed_rw = self._route_rewrite(user_msg)
+        if routed_rw:
+            c.act("rewrite", routed_rw[:120])
+            res = self.tools["rewrite"].run(routed_rw)
+            c.result(self.tools["rewrite"].summary(res),
+                     ok=bool(res.get("ok")))
+            if not res.get("ok"):
+                return f"Rewrite failed: {res.get('error')}"
+            body = res.get("rewritten", "")
+            verdict = ""
+            if not res.get("faithful"):
+                verdict = ("\n\n[faithful-check: the rewrite dropped some source "
+                           f"anchors {res.get('missing_names', []) + res.get('missing_words', [])}"
+                           f" — miss {res.get('miss_fraction')}. Ask me to redo "
+                           "keeping those beats.]")
+            return body + verdict
 
         final = ""
         used_tool = False
@@ -1181,6 +1356,68 @@ class Sara:
                         "want — just produce the requested story/scene/text. "
                         "No tool needed."})
                     continue
+
+                # SUBSTITUTION-DODGE GUARD (hardened 2026-08-06). A rewrite /
+                # resummarize / "make it professional" request that comes WITH
+                # pasted source is not satisfied by inventing a wholly different
+                # story. Detect: user asked to rewrite/summarize/edit the pasted
+                # text, source tokens ARE present in context (a prior read/browse
+                # of the source, or the source is in the user turn), but S.A.R.A's
+                # reply shares NONE of the source's distinctive tokens. That means
+                # she produced a substitute instead of transforming the given
+                # text — a long-form dodge the <60-char guard misses.
+                rw = any(w in user_msg.lower() for w in
+                         ("rewrite", "rewrite it", "summarize", "summarise",
+                          "make it", "make this", "rewrite this", "edit this",
+                          "reword", "rephrase", "professional", "like a pro",
+                          "clean it up", "polish"))
+                if rw and not used_tool and step < self.cfg.get("max_steps", 6) - 1:
+                    # Gather source text actually seen this turn: any tool RESULT
+                    # block (read_file / browse / web_fetch / etc.) plus the user
+                    # turn. The user paste only counts if it's the source, not the
+                    # request sentence.
+                    src = user_msg
+                    for m in messages:
+                        if m.get("role") == "user" and "RESULT of" in m.get("content", ""):
+                            src += "\n" + m["content"]
+                    # Extract distinctive tokens from source: alnum words >=4 chars,
+                    # lowercased, excluding the request-words so the user's own
+                    # "rewrite this story" sentence doesn't count as source.
+                    req_words = set(("rewrite", "summarize", "summarise", "story",
+                                     "make", "professional", "edit", "reword",
+                                     "rephrase", "polish", "this", "that", "please"))
+                    src_tokens = {t for t in src.lower().split()
+                                  if t.isalnum() and len(t) >= 4 and t not in req_words}
+                    # Proper nouns / names (capitalised mid-sentence) are the
+                    # strongest source signal — pull Titlecase tokens too.
+                    import re as _re
+                    names = set(_re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", src))
+                    probes = (src_tokens | names)
+                    if len(probes) >= 4:
+                        out_tokens = {t for t in prose.lower().split()
+                                      if t.isalnum() and len(t) >= 4
+                                      and t not in req_words}
+                        out_names = set(_re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", prose))
+                        # How many DISTINCTIVE source tokens made it into her reply?
+                        # (probes & src_tokens is trivially == src_tokens, so we
+                        # intersect the SOURCE tokens with the OUTPUT tokens instead.)
+                        overlap = len(src_tokens & out_tokens) + len(names & out_names)
+                        # <2 shared distinctive tokens across a rewrite of rich
+                        # source = substitution dodge. Nudge to transform the real
+                        # text.
+                        if overlap < 2:
+                            c.think("she substituted a different story instead of "
+                                    "rewriting the provided text — forcing the real "
+                                    "transform")
+                            messages.append({"role": "assistant", "content": reply})
+                            messages.append({"role": "user", "content":
+                                "That was a substitution, not a rewrite. You wrote a "
+                                "different story instead of transforming the text I "
+                                "gave you. REWRITE THE ACTUAL SOURCE I PROVIDED — "
+                                "keep its characters, names, and plot beats, and "
+                                "restyle them as asked. Do not invent new characters "
+                                "or a new plot. Produce it directly in your reply."})
+                            continue
                 break
 
             # Narrate intent BEFORE acting — this is the transparency contract.
