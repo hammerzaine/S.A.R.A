@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>S.A.R.A's Space Engineers Scripting Hub</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1>🛰️ S.A.R.A's SE Scripting Hub</h1>
+    <p class="tagline">Where programmable blocks meet chaos (the good kind).</p>
+    <nav>
+      <a href="#what">What is SE?</a>
+      <a href="#pb">The Programming Block</a>
+      <a href="#lang">The Language</a>
+      <a href="#sample">Live Script</a>
+      <a href="#connect">Connect a Model</a>
+      <a href="#links">Resources</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="what">
+      <h2>What is Space Engineers?</h2>
+      <p>
+        Space Engineers is a voxel-based sandbox game by Keen Software House.
+        You mine, weld, grind, and build ships, stations, and rovers out of
+        interlocking blocks. The fun really kicks off when you automate it.
+      </p>
+    </section>
+
+    <section id="pb">
+      <h2>The Programming Block</h2>
+      <p>
+        The Programmable Block (PB) is an in-game computer. Drop one on your
+        grid, paste in a script, hit <strong>Recompile</strong>, and it runs
+        your C# code against everything on the grid. It can read sensors,
+        flick thrusters, sort cargo, talk to other grids over antennas — the
+        lot. It's the brain of any serious base.
+      </p>
+    </section>
+
+    <section id="lang">
+      <h2>The Language: C#</h2>
+      <p>
+        The PB runs a <strong>whitelisted subset of C#</strong> (.NET). You do
+        NOT get the whole framework — dangerous bits like
+        <code>System.Threading.Thread</code> are blocked. Three hard limits:
+      </p>
+      <ul>
+        <li><strong>100,000 characters</strong> max script size.</li>
+        <li><strong>50,000 instruction counter</strong> per run (method calls, loops, branches all count).</li>
+        <li><strong>Whitelist</strong> of allowed .NET types — anything else is a compile error.</li>
+      </ul>
+      <p>Every script has this skeleton:</p>
+      <pre><code>public Program() { }            // runs once on (re)compile
+public void Save() { }          // called on game save / before recompile
+public void Main(string argument) { /* your logic */ }</code></pre>
+      <p>
+        The class is always named <code>Program</code> and inherits
+        <code>MyGridProgram</code>. Your entry point is <code>Main</code>.
+        The <code>argument</code> string comes from timer/button/sensor toolbars.
+      </p>
+    </section>
+
+    <section id="sample">
+      <h2>Live Script Example</h2>
+      <p>Click to reveal a real PB script that lists every battery's stored power:</p>
+      <button id="revealBtn" type="button">⚡ Recompile &amp; Show Script</button>
+      <span id="codePanel" class="hidden"><code>List&lt;IMyBatteryBlock&gt; batteries = new List&lt;IMyBatteryBlock&gt;();
+GridTerminalSystem.GetBlocksOfType(batteries);
+
+foreach (var battery in batteries)
+{
+    Echo($"{battery.CustomName}: {battery.CurrentStoredPower:F1} MWh");
+}</code></span>
+    </section>
+
+    <section id="connect">
+      <h2>Connect a Model (Hermes-style)</h2>
+      <p>
+        This panel mirrors the exact LLM-connection options Hermes Agent shows
+        in <code>hermes setup</code> / <code>hermes model</code> — same 36
+        providers, same display order, same 6 grouped rows, plus the
+        "Custom endpoint" special case (that's how your local S.A.R.A / Ollama
+        model plugs in). Pick a provider to see its auth type, description, and
+        the equivalent Hermes command. Your pick is saved in this browser.
+      </p>
+      <p class="disclaimer">
+        ⚠️ A static site can't safely hold API keys or call providers. This is a
+        faithful UI mirror — to actually connect, run the shown Hermes command
+        in your terminal (source of truth: hermes_cli/models.py on this box).
+      </p>
+
+      <form id="modelForm" autocomplete="off">
+        <label for="provider">LLM connection</label>
+        <select id="provider" name="provider"></select>
+
+        <div id="customFields" class="field-group hidden">
+          <label for="baseUrl">Base URL</label>
+          <input type="text" id="baseUrl" name="baseUrl" placeholder="https://localhost:11434/v1" />
+          <label for="customKey">API key (optional)</label>
+          <input type="password" id="customKey" name="customKey" placeholder="optional" />
+          <label for="customModel">Default model name</label>
+          <input type="text" id="customModel" name="customModel" placeholder="e.g. sara-v2l" />
+        </div>
+
+        <button type="submit" id="saveModel">💾 Save selection</button>
+        <button type="button" id="clearModel">🧹 Clear</button>
+      </form>
+
+      <div id="infoBox" class="info-box hidden">
+        <h3 id="infoLabel"></h3>
+        <p id="infoDesc" class="info-desc"></p>
+        <p id="infoAuth" class="info-auth"></p>
+        <div class="cmd-box">
+          <h4>Equivalent Hermes command</h4>
+          <pre><code id="cmdText"></code></pre>
+          <p id="envHint" class="env-hint"></p>
+        </div>
+      </div>
+    </section>
+
+    <section id="links">
+      <h2>Resources</h2>
+      <ul>
+        <li><a href="https://malforge.github.io/spaceengineers/pbapi" target="_blank" rel="noopener">MDK² PB API Reference</a></li>
+        <li><a href="https://spaceengineers.wiki.gg/wiki/Scripting" target="_blank" rel="noopener">Space Engineers Scripting Wiki</a></li>
+        <li><a href="https://github.com/malforge/mdk2" target="_blank" rel="noopener">MDK² (VS / VS Code / Rider toolkit)</a></li>
+        <li><a href="https://hermes-agent.nousresearch.com/docs/integrations/providers" target="_blank" rel="noopener">Hermes Providers Guide</a></li>
+        <li>Keen Software House Discord → #programmable-block</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    Source of truth for model options: <code>hermes_cli/models.py</code> (CANONICAL_PROVIDERS + PROVIDER_GROUPS) on this box.
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
