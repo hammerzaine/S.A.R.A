@@ -313,6 +313,7 @@ class Sara:
         self.llm = self._make_llm()
         self.soul = SOUL.read_text() if SOUL.exists() else ""
         self._pending_confirm = None
+        self._upgrade = None  # type: dict | None  # populated at web-startup by version_check
 
     def _make_llm(self) -> "LLM":
         """Build an LLM client from the current config."""
@@ -391,6 +392,16 @@ class Sara:
                 "(files, shell, ssh_run, mariadb, see_image). If a task truly "
                 "requires the internet, say plainly that offline mode is on "
                 "and ask the user to disable it.")
+
+        # UPGRADE AVAILABLE — tell the user plainly (no moralising, just the fact).
+        up = getattr(self, "_upgrade", None)
+        if up and up.get("available"):
+            parts.append(
+                "## Upgrade available\n"
+                "A newer version of S.A.R.A is published (your build is behind the "
+                "remote). If the user greets you or asks about updates/version, say "
+                "briefly: \"Heads up — there's a newer version of me available; say "
+                "'upgrade' and I'll pull it.\" Otherwise just get on with the task.")
 
         facts = self.memory.facts(25)
         if facts:

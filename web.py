@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from sara.agent import Sara
 from sara.console import Console
+from sara.version_check import check_for_upgrade
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "web"
@@ -100,6 +101,34 @@ _sink: queue.Queue = queue.Queue()
 _console = EventConsole(_sink)
 _sara = Sara(console=_console)
 
+# Startup self-upgrade check (offline-safe). Runs once at boot, never blocks.
+# Stores the result on the agent so /api/status can report it. Compares the
+# local git HEAD against the remote 'main' HEAD (works for private repos via
+# the existing deploy key — no token needed).
+try:
+    import subprocess as _sp
+    _local_commit = _sp.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+        timeout=10, cwd=str(ROOT),
+    ).stdout.strip() or None
+    _sara._upgrade = check_for_upgrade(_local_commit)
+except Exception as _e:  # never let version-check break startup
+    _sara._upgrade = {"available": False, "local_commit": None,
+                      "latest_commit": None, "checked": False,
+                      "error": str(_e), "remote": "origin"}
+
+# Announce at boot (goes to the service journal / stdout).
+_up = _sara._upgrade or {}
+if _up.get("available"):
+    print(f"[S.A.R.A] UPGRADE AVAILABLE: local {_up.get('local_commit','?')[:8]} "
+          f"-> remote {_up.get('latest_commit','?')[:8]} ({_up.get('remote')})",
+          flush=True)
+elif _up.get("checked"):
+    print(f"[S.A.R.A] version check ok — up to date ({_up.get('local_commit','?')[:8]})",
+          flush=True)
+else:
+    print(f"[S.A.R.A] version check skipped ({_up.get('error')})", flush=True)
+
 
 class Ask(BaseModel):
     message: str
@@ -123,6 +152,8 @@ def status():
         "base_url": st.get("base_url"),
         "no_research": st.get("no_research", False),
         "provider_presets": _sara.get_config().get("provider_presets", []),
+        "upgrade": _sara._upgrade or {"available": False, "local": st.get("version"),
+                                       "latest": None, "checked": False, "error": None},
         "model": st["model"],
         "online": st["online"],
         "turns": st["turns"],
