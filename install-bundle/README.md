@@ -40,9 +40,20 @@ bin/sara status          # model / connection check
 
 ## Requirements
 - Python 3.10 or newer.
-- An OpenAI-compatible model endpoint — **Ollama** is the recommended local
-  option (`ollama serve`, then point `config.json` at it). Set it in
-  `config.json` (`base_url` / `model`) or via the web UI's config panel.
+- An OpenAI-compatible model endpoint — **Nous Portal** is the recommended
+  option (`https://portal.nousresearch.com/v1`). Set it in `config.json`
+  (`base_url` / `model`) or via the web UI's config panel.
+
+## Default config after install
+```json
+{
+  "provider": "nous",
+  "base_url": "https://portal.nousresearch.com/v1",
+  "model": "stepfun/step-3.7-flash:free",
+  "fallback_models": ["stepfun/step-3.5-flash:free"]
+}
+```
+Edit `config.json` to swap providers or point at a local Ollama if you prefer.
 
 ## Notes
 - `credentials.json`, `config.json`, and the memory DB (`data/sara.db`) are
