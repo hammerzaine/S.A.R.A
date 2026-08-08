@@ -37,9 +37,9 @@ ROOT = Path(__file__).resolve().parent
 BACKUP_DIR = ROOT / "backups"
 STATE_FILE = ROOT / "upgrade_state.json"
 
-# Files that are LOCAL state / secrets — never take from a repo, always
-# preserve from the live install (and from backups).
-PROTECTED = {"credentials.json", "config.json", "upgrade_state.json"}
+# Files that are LOCAL state / secrets / personality — never take from a repo,
+# always preserve from the live install (and from backups).
+PROTECTED = {"credentials.json", "config.json", "upgrade_state.json", "SOUL.md"}
 # Directories we never pull from a repo or clobber.
 PROTECTED_DIRS = {"data", "backups", "__pycache__", ".git", "web/__pycache__"}
 # Files we never copy in from a repo (cruft / local).
@@ -225,6 +225,17 @@ def _verify() -> tuple[bool, str]:
 
 def upgrade(repo_url: str, branch: str = "main",
             new_version: str | None = None) -> int:
+    # Allow a bare remote NAME (e.g. "origin") instead of a full URL — resolve
+    # it to its fetch URL so "/upgrade" (which passes "origin main") works.
+    if not repo_url.startswith(("http://", "https://", "git@", "ssh://")):
+        try:
+            out = subprocess.run(
+                ["git", "remote", "get-url", repo_url],
+                capture_output=True, text=True, cwd=ROOT)
+            if out.returncode == 0 and out.stdout.strip():
+                repo_url = out.stdout.strip()
+        except Exception:
+            pass
     ver_before = get_version()
     print(f"[1/5] backing up current install (v{ver_before})…")
     bk = backup(label=f"pre-upgrade-from-{ver_before}")

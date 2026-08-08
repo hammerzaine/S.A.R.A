@@ -306,6 +306,70 @@ class AppendFile(Tool):
                 if r.get("ok") else r.get("error"))
 
 
+class PatchFile(Tool):
+    """Surgically edit a file in place (find-and-replace), without rewriting
+    the whole thing. Format (first line is the path, then the edit spec):
+
+        patch_file <path>
+        <<<OLD>>>
+        <exact old text to replace>
+        <<<NEW>>>
+        <replacement text>
+        <<<END>>>
+
+    The OLD text must appear verbatim in the file. If `replace_all` is passed
+    on the path line, every occurrence is replaced. Returns the number of
+    replacements made. Prefer this over `write_file` when you only need to
+    change a line or two — it never clobbers the rest of the file.
+    """
+    name = "patch_file"
+    description = ("Edit a file IN PLACE with a find-and-replace, without "
+                   "overwriting the whole file. Use this for small changes.")
+    usage = ("patch_file <path> [replace_all]\n"
+             "<<<OLD>>>\n<exact text to replace>\n<<<NEW>>>\n"
+             "<replacement>\n<<<END>>>")
+
+    def run(self, arg: str) -> dict:
+        import re as _re
+        cleaned = (arg or "").strip()
+        if "\n" not in cleaned and "\\n" in cleaned:
+            cleaned = cleaned.replace("\\n", "\n", 1)
+        # path line is everything up to the first <<<OLD>>>
+        m = _re.search(r"<<<\s*OLD\s*>>>", cleaned)
+        if not m:
+            return {"ok": False, "error": "need path line + <<<OLD>>> block"}
+        head = cleaned[:m.start()].strip().strip("`\"'")
+        # parse replace_all from path line
+        replace_all = "replace_all" in head
+        p = Path(head.replace("replace_all", "").strip()).expanduser()
+        body = cleaned[m.end():]
+        nm = _re.search(r"<<<\s*NEW\s*>>>\s*(.*?)\s*<<<\s*END\s*>>>", body,
+                        _re.S)
+        if not nm:
+            return {"ok": False, "error": "need <<<NEW>>> ... <<<END>>> block"}
+        old = body[:nm.start()].strip("\n")
+        new = nm.group(1).strip("\n")
+        if not p.exists():
+            return {"ok": False, "error": f"file not found: {p}"}
+        try:
+            text = p.read_text()
+        except OSError as e:
+            return {"ok": False, "error": str(e)}
+        if old not in text:
+            return {"ok": False, "error": "OLD text not found verbatim in file"}
+        count = text.count(old) if replace_all else (1 if old in text else 0)
+        text = text.replace(old, new, -1 if replace_all else 1)
+        try:
+            p.write_text(text)
+        except OSError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "path": str(p), "replacements": count}
+
+    def summary(self, r):
+        return (f"patched {r['replacements']} spot(s) in {r['path']}"
+                if r.get("ok") else r.get("error"))
+
+
 class Shell(Tool):
     name = "shell"
     description = "Run a read-only shell command and return its output."
@@ -1878,6 +1942,7 @@ echo "=== PROBE PATHS ==="; export HOSTNAME; for p in / /work/ /books/ /mtg/ /mt
 
 def build_registry(confirm=None) -> dict:
     tools = [ListDir(), FindPath(), ReadFile(), WriteFile(), AppendFile(),
+             PatchFile(),
              Shell(confirm=confirm), WebSearch(), WebFetch(),
              ScrapeCategories(), ScrapeJS(), WebBrowse(),
              MariaDB(), SSHRun(), WinRun(), DBImport(), SeeImage(),

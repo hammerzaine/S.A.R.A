@@ -873,8 +873,12 @@ class Sara:
         m = _re.search(
             r"(?:https?://|git@|ssh://)[\w./@:%-]+(?:\.git)?", user_msg)
         if not m:
-            # "upgrade" with no URL -> just list/status, don't pull
-            return "list"
+            # Bare "/upgrade" or "upgrade" with no URL -> pull from the
+            # canonical deploy source (origin = .225 mirror). This is the
+            # one-typo-proof path: the user just says "upgrade" and she
+            # self-updates. Memory (data/) + SOUL.md are preserved by
+            # sara_upgrade.py (.gitignored / PROTECTED), so nothing is erased.
+            return "origin main"
         url = m.group(0).strip().rstrip(").,")
         # optional branch after "branch <x>" or "<url> <branch>"
         bm = _re.search(r"(?:branch\s+|(?<=\s))("
