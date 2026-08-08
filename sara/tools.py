@@ -1274,10 +1274,83 @@ class SSHRun(Tool):
         except Exception:
             return {}
 
+    def _connect(self, user, host):
+        """Open a paramiko SSH connection to (user, host) using creds/key."""
+        key = os.path.expanduser(self._cfg.get("key_path", "~/.ssh/sara_agent_key"))
+        kwargs = {"hostname": host, "port": int(self._cfg.get("port", 22)),
+                  "username": user, "timeout": 30, "look_for_keys": False,
+                  "allow_agent": False}
+        if os.path.exists(key):
+            kwargs["key_filename"] = key
+        else:
+            pw = self._cfg.get("password")
+            if not pw:
+                return None, "no SSH key and no password in creds"
+            kwargs["password"] = pw
+        import paramiko
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(**kwargs)
+        return client, None
+
+    def send_file(self, arg: str) -> dict:
+        """Transfer a LOCAL file to a REMOTE host over SFTP (key auth, no
+        password prompt). This is how S.A.R.A actually PUTS a file on a server
+        (e.g. a website she built, onto the website server). Without this she
+        only ever writes to her own local disk and then *claims* it's deployed.
+
+        Arg form:  send_file <local> -> <user@host>:<remote>
+          e.g. send_file /home/zaine/site.html -> root@192.168.2.225:/var/www/html/index.html
+        Friendly host aliases (website server -> .225) are resolved.
+        """
+        arg = (arg or "").strip()
+        m = re.match(r"^(.+?)\s*(?:->|to)\s*([\w.-]+@)?([\w.\- ]+?):(.+)$", arg)
+        if not m:
+            return {"ok": False, "error":
+                    "usage: send_file <local> -> <user@host>:<remote> "
+                    "(e.g. /tmp/x.html -> root@192.168.2.225:/var/www/html/index.html)"}
+        local = m.group(1).strip().strip("`\"'")
+        user = m.group(2).rstrip("@") if m.group(2) else self._cfg.get("user")
+        host = self._resolve_host(m.group(3).strip())
+        remote = m.group(4).strip()
+        lp = Path(local).expanduser()
+        if not lp.exists():
+            return {"ok": False, "error": f"local file not found: {lp}"}
+        try:
+            data = lp.read_bytes()
+        except OSError as e:
+            return {"ok": False, "error": f"read failed: {e}"}
+        try:
+            client, err = self._connect(user, host)
+            if err:
+                return {"ok": False, "error": f"ssh connect to {user}@{host} failed: {err}"}
+            sftp = client.open_sftp()
+            parent = str(Path(remote).parent)
+            try:
+                sftp.stat(parent)
+            except IOError:
+                try:
+                    client.exec_command(f"mkdir -p {parent}")
+                except Exception:
+                    pass
+            sftp.put(str(lp), remote)
+            sftp.close()
+            client.close()
+            return {"ok": True, "local": str(lp),
+                    "remote": f"{user}@{host}:{remote}",
+                    "bytes": len(data), "error": None}
+        except Exception as e:
+            return {"ok": False, "error": f"send_file failed: {e}"}
+
     def run(self, arg: str) -> dict:
         arg = (arg or "").strip().strip("`\"'")
         if not arg:
             return {"ok": False, "error": "no command given"}
+        # send_file is a distinct subcommand with its own transfer path.
+        low0 = arg.lower().lstrip()
+        if low0.startswith("send_file") or low0.startswith("send-file"):
+            sub = arg.split(None, 1)[1] if " " in arg else ""
+            return self.send_file(sub)
         host, user = self._cfg.get("host"), self._cfg.get("user")
         # Target forms (user@ optional; friendly aliases supported):
         #   "user@host :: command"   explicit host/user
@@ -1346,8 +1419,38 @@ class SSHRun(Tool):
     def summary(self, r: dict) -> str:
         if not r.get("ok"):
             return f"ssh failed: {r.get('error')}"
+        if "remote" in r and "local" in r:
+            return f"sent {r['local']} -> {r['remote']} ({r.get('bytes')} bytes)"
         lines = (r.get("stdout") or "").strip().splitlines()
         return f"ssh {r.get('host')} exit {r.get('exit_code')}, {len(lines)} lines out"
+
+
+class SendFile(Tool):
+    """Transfer a LOCAL file to a REMOTE host (SFTP). See SSHRun.send_file.
+
+    This is its own tool so the model can emit `ACTION: send_file` directly
+    when the user says 'put this on the website server' / 'copy it to 192.168.2.225'.
+    Without it she only ever wrote to her own disk and *claimed* it was deployed.
+    """
+    name = "send_file"
+    description = ("Copy a LOCAL file to a REMOTE server over SFTP (key auth, "
+                   "no password). Use this to actually DEPLOY a file she built "
+                   "onto another machine — e.g. a website onto the website server. "
+                   "Arg: <local-path> -> <user@host>:<remote-path>.")
+    usage = ("send_file <local> -> <user@host>:<remote>\n"
+             "  e.g. send_file /home/zaine/site.html "
+             "-> root@192.168.2.225:/var/www/html/index.html")
+
+    def __init__(self):
+        self._ssh = SSHRun()
+
+    def run(self, arg: str) -> dict:
+        return self._ssh.send_file(arg)
+
+    def summary(self, r: dict) -> str:
+        if not r.get("ok"):
+            return f"send_file failed: {r.get('error')}"
+        return f"sent {r.get('local')} -> {r.get('remote')} ({r.get('bytes')} bytes)"
 
 
 class WinRun(Tool):
@@ -2040,7 +2143,7 @@ def build_registry(confirm=None) -> dict:
              ScrapeCategories(), ScrapeJS(), WebBrowse(),
              MariaDB(), SSHRun(), WinRun(), DBImport(), SeeImage(),
              ConfigTool(), ModelList(), UpgradeTool(), Rewrite(),
-             ServerInventory()]
+             ServerInventory(), SendFile(),]
     return {t.name: t for t in tools}
 
 

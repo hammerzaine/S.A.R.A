@@ -970,6 +970,56 @@ class Sara:
             cleaned = _re.sub(phrase, "", cleaned, flags=_re.I)
         return cleaned.strip()
 
+    def _route_deploy(self, user_msg: str) -> str | None:
+        """Deterministic deploy router.
+
+        When the user says 'put/copy/send/move/deploy <file> to/on <host>' this
+        returns a ready-to-run `send_file` arg so she ACTUALLY transfers the file
+        to the remote host (SFTP) instead of writing it locally and claiming it's
+        deployed. The fragility: the 3B model writes the file to her own disk and
+        says 'done' without ever moving it to the target. Force the transfer.
+
+        Arg emitted:  <local> -> <user@host>:<remote>
+        Host can be a friendly alias ('website server' -> 192.168.2.225) or an
+        IP. If no remote path is given, default to the file's basename under a
+        sane remote dir (/var/www/html for a site, else /root).
+        """
+        low = user_msg.lower()
+        if not any(w in low for w in
+                   ("put ", "copy ", "send ", "move ", "deploy ", "upload ",
+                    "push ", "transfer ", "scp ", "to the website",
+                    "on the website", "to 192.168", "onto 192.168")):
+            return None
+        # Need a local file path somewhere in the message.
+        import re as _re
+        pm = _re.search(r"(/[\~\/]?[\w./\-]+\.(?:html?|php|txt|js|css|json|"
+                       r"png|jpg|jpe?g|gif|md|py|sh|xml|svg))", user_msg)
+        if not pm:
+            return None
+        local = pm.group(1)
+        # Find the target host: friendly alias or IP.
+        host = None
+        for alias in ("website server", "web server", "the web box",
+                      "database server", "home server", "windows", "win"):
+            if alias in low:
+                host = alias
+                break
+        ipm = _re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", user_msg)
+        if ipm:
+            host = ipm.group(1)
+        if not host:
+            return None
+        # strip a trailing slash from host token if present
+        host = host.rstrip("/")
+        # Infer remote path from the local file's basename.
+        base = local.rsplit("/", 1)[-1]
+        remote_dir = "/var/www/html" if base.lower().endswith(
+            (".html", ".htm", ".php", ".js", ".css")) else "/root"
+        remote = f"{remote_dir}/{base}"
+        # user@host — default to root for the ssh_run/send_file creds user
+        user = self.tools["ssh_run"]._cfg.get("user") or "root"
+        return f"{local} -> {user}@{host}:{remote}"
+
     def _route_identity(self, user_msg: str) -> str | None:
         """Deterministic identity router.
 
@@ -1379,6 +1429,20 @@ class Sara:
                            "keeping those beats.]")
             return body + verdict
 
+        # DETERMINISTIC DEPLOY ROUTER — 'put/copy/send/move <file> to <host>'.
+        # Forces an actual SFTP transfer to the remote host so she doesn't write
+        # the file locally and CLAIM it's deployed. Bypasses the fragile model.
+        routed_dep = self._route_deploy(user_msg)
+        if routed_dep:
+            c.act("send_file", routed_dep[:120])
+            res = self.tools["send_file"].run(routed_dep)
+            c.result(self.tools["send_file"].summary(res),
+                     ok=bool(res.get("ok")))
+            if res.get("ok"):
+                return (f"Deployed {res['local']} to {res['remote']} "
+                        f"({res['bytes']} bytes) via SFTP. It's on the host now.")
+            return (f"Deploy failed: {res.get('error') or (res.get('output') or '')[:300]}")
+
         final = ""
         used_tool = False
         denial_retries = 0
@@ -1447,8 +1511,19 @@ class Sara:
                 # search and feed the real result back. Mirrors the ssh backstop.
                 # SKIPPED when offline mode is on (no internet) — in that case
                 # she must answer from local knowledge/skills, not the web.
+                # GUARD: if the question is really about a REMOTE HOST / file on a
+                # server (mentions ssh/home server/host/IP), do NOT web-search it —
+                # that's a filesystem/host-state question, not a web lookup. Let the
+                # ssh backstop (below) check it on the actual host instead of
+                # googling a question about her own machines.
+                _is_host_q = any(w in user_msg.lower() for w in
+                                 ("ssh", "home server", "the server", "remote",
+                                  "192.168.", "10.0.", "on the website",
+                                  "website server", "database server",
+                                  ".225", ".140", ".143"))
                 if (self._is_web_question(user_msg) and not used_tool
-                        and step == 0 and not self.cfg.get("no_research")):
+                        and step == 0 and not self.cfg.get("no_research")
+                        and not _is_host_q):
                     forced = self._force_web(user_msg)
                     if forced:
                         cmd, res = forced
