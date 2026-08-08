@@ -1148,6 +1148,14 @@ class Sara:
         c = self.console
         self.memory.log("user", user_msg)
 
+        # Reset per-turn guard state. The web service keeps ONE long-lived
+        # Sara() singleton, so these counters must NOT leak across turns —
+        # a stale repeat/broken-call count from a previous turn would
+        # otherwise fire the loop-breaker on an unrelated new turn.
+        self._repeat = {}
+        self._broken_count = {}
+        self._last_web_ok = False
+
         # Re-sync from config.json so live settings changes (model, provider,
         # base_url, api_key, no_research) made via the config tool apply on the
         # very next turn, even if set_config ran in a different process/thread.
