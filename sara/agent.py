@@ -487,8 +487,53 @@ class Sara:
     # it and make her try again.
     DENIAL_RE = None  # (kept for clarity; detection is substring-based)
 
+    def _unwrap_json_reply(self, text: str) -> str:
+        """The 3B fine-tune wraps replies in a JSON envelope like
+        ```json\n{"ok": true, "result": "..."}\n```
+        or {"ok": true, "saved_file_path": "..."} or a bare
+        {"ok":..,"result":..}. The user wants S.A.R.A's actual voice, not an API
+        envelope. If the WHOLE reply is just a JSON object, unwrap it to a
+        human-readable string. If it's prose (possibly with embedded JSON),
+        leave it alone."""
+        import re as _re, json as _json
+        s = text.strip()
+        if not s:
+            return s
+        # Strip a leading/trailing ```json ... ``` fence if present.
+        m = _re.match(r"^```[a-zA-Z]*\s*(.*?)\s*```$", s, _re.S)
+        inner = m.group(1) if m else s
+        inner = inner.strip()
+        try:
+            obj = _json.loads(inner)
+        except Exception:
+            return text  # not a pure JSON envelope — leave prose alone
+        if not isinstance(obj, dict):
+            return text
+        # Decide if this whole thing is an envelope (no natural prose elsewhere).
+        # If the original had more than the fenced JSON, leave it.
+        if m and len(s) > len(inner) + 12:
+            # there's content outside the fence; don't clobber it
+            return text
+        # Pick the most human field, in priority order.
+        for key in ("result", "answer", "message", "response", "text",
+                    "content", "saved_file_path", "path", "output", "summary"):
+            if key in obj and isinstance(obj[key], str) and obj[key].strip():
+                return obj[key].strip()
+        # No string content field — build a friendly line from the values.
+        meta = {"ok", "status", "success", "error", "error_code", "code", "done"}
+        vals = [str(v).strip() for k, v in obj.items()
+                if k not in meta and v not in (None, "", [])]
+        if vals:
+            return "; ".join(vals)
+        # Fall back to a terse status line.
+        return "Done." if obj.get("ok") else (str(obj.get("error")) or "Done.")
+
     def _is_false_denial(self, text: str) -> bool:
-        t = " ".join(text.lower().split())
+        # Strip ```json / ``` fences (the 3B model wraps refusals in them)
+        # so the detectors below can actually see the apology inside.
+        import re as _re
+        _fenced = _re.sub(r"```[a-z]*\n.*?```", " ", text, flags=_re.S | _re.I)
+        t = " ".join(_fenced.lower().split())
         # Expand contractions so "do not" matches "don't" and similar — the
         # model writes both forms and the old detector missed "do not".
         for a, b in (("don't", "do not"), ("can't", "can not"),
@@ -599,6 +644,15 @@ class Sara:
         the shell-ssh hack, which would block on a password prompt.
         """
         low = user_msg.lower()
+        # NEVER force SSH for public-website / fetch tasks. Those are WEB tasks
+        # (web_fetch / browse / scrape_js). Forcing ssh_run here is what made her
+        # SSH the DB box when asked to "copy popvid.ai". (Fix 2026-08-08.)
+        if any(w in low for w in (
+                "copy", "fetch", "scrape", "download", "http://", "https://",
+                "www.", ".com", ".ai", ".net", "popvid", "webpage",
+                "web page", "the site", "that site", "this site", "a site",
+                "url")):
+            return None
         # Match an explicit user@host or IP, OR the common "home server" /
         # "the server" / "remote" phrasing that always means 192.168.2.140.
         m = _re.search(r"(?:(\w[\w.-]*)@)?"
@@ -640,6 +694,21 @@ class Sara:
         search is actually relevant.
         """
         low = user_msg.lower().strip()
+        # WEB-COPY / FETCH intent (Fix 2026-08-08): "copy <site>", "fetch <url>",
+        # "download the page", or any bare URL -> fetch it, don't search. This is
+        # what she should do instead of the old (now removed) ssh-to-DB hijack.
+        import re as _rew
+        url_m = _rew.search(r"https?://[^\s'\"]+|(?:www\.)?[a-z0-9-]+\.[a-z]{2,}(?:/[^\s'\"]*)?", low)
+        copy_intent = any(w in low for w in ("copy", "fetch", "download the page",
+                                             "download", "scrape", "mirror", "grab the site"))
+        if url_m and (copy_intent or any(d in low for d in ("copy", "fetch", "download", "site", "page", "url", "scrape"))):
+            url = url_m.group(0)
+            if not url.startswith("http"):
+                url = "https://" + url
+            try:
+                return url, self.tools["web_fetch"].run(url)
+            except Exception as e:                            # noqa: BLE001
+                return url, {"ok": False, "error": f"{type(e).__name__}: {e}"}
         # Pull a query: strip common lookup-prefix words.
         for prefix in ("look up ", "tell me about ", "what is ", "what are ",
                        "what was ", "who made ", "who developed ",
@@ -830,6 +899,47 @@ class Sara:
                       r"(identity|name|wrong)|i asked .{0,20} who)\b", m):
             return "identity"
         return None
+
+    def _route_server_inventory(self, user_msg: str) -> str | None:
+        """Deterministic server-inventory router.
+
+        Forces the server_inventory tool when the user clearly wants a survey of
+        what web sites / apps / services live on a box (the exact task a
+        previous weak build dodged by running `uptime` on the wrong host).
+        Returns the host argument to feed server_inventory, or None.
+
+        Catches both the explicit "study/inventory/list the sites on <host>"
+        phrasing and friendlier "what's running on the web box" / "what web
+        apps are on <host>" wording, and extracts the host (friendly alias or IP
+        — server_inventory resolves the alias itself).
+        """
+        import re as _re
+        low = user_msg.lower()
+        # Intent words that signal a site/service inventory request.
+        intent = any(w in low for w in
+                     ("study all the sites", "study the sites", "list the sites",
+                      "list all the sites", "list all the web", "inventory",
+                      "what sites", "what web apps", "what web app", "what's running on",
+                      "whats running on", "what is running on", "web apps on",
+                      "sites on", "sites are on", "enumerate", "what's hosted",
+                      "whats hosted", "what is hosted", "map the server"))
+        if not intent:
+            return None
+        # Find a host: friendly alias ("website server", "home server") or an
+        # IPv4 address. server_inventory does alias resolution too, but pulling
+        # the token here keeps the arg clean.
+        m = _re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", user_msg)
+        if m:
+            return m.group(1)
+        # Friendly alias words: grab the trailing "website server" / "home
+        # server" / "database" / "web server" / "225" style phrase.
+        for alias in ("website server", "web server", "home server", "database",
+                      "home", "database server", "225", "140", "web", "the web box",
+                      "the web server", "the database", "the home server"):
+            if alias in low:
+                return alias
+        # Bare "inventory the server" with no host -> default to the web box.
+        return "website server"
 
     def _route_url(self, user_msg: str) -> str | None:
         """Deterministic web-navigation router.
@@ -1051,6 +1161,28 @@ class Sara:
                     "peer, act on what you ask, and remember what we've worked on. "
                     "Ask me to wrangle something and I'll sort it.")
 
+        # DETERMINISTIC SERVER-INVENTORY ROUTER — when the user asks S.A.R.A to
+        # "study / list / inventory the sites on the server", force the
+        # server_inventory tool on the RIGHT host. A previous weak build dodged
+        # this exact task by running `uptime` on the database host instead of
+        # enumerating the web box. The router extracts the host and runs the
+        # real probe so the answer is the actual topology, not a one-liner.
+        # (Two-layer pattern: real tool + deterministic router.)
+        routed_inv = self._route_server_inventory(user_msg)
+        if routed_inv:
+            host_arg = routed_inv
+            c.act("server_inventory", host_arg[:120])
+            res = self.tools["server_inventory"].run(host_arg)
+            c.result(self.tools["server_inventory"].summary(res),
+                     ok=bool(res.get("ok")))
+            if res.get("ok"):
+                out = (res.get("stdout") or "").strip()
+                return (f"Here is the full inventory of `{res.get('host')}` "
+                        f"(real SSH probe, not a guess):\n\n{out}")
+            else:
+                return (f"Tried to inventory `{host_arg}` — error: "
+                        f"{res.get('error')}")
+
         # DETERMINISTIC WEB-NAVIGATION ROUTER — when the user pastes a link
         # (or a "go to/open <url>" request) and asks S.A.R.A to do something
         # with the page, bypass the fragile 3B model and run browse() directly.
@@ -1209,6 +1341,74 @@ class Sara:
                             f"facts (wrong publisher, wrong year, made-up names)."})
                         continue
 
+                # Backstop: WEB-COPY / FETCH intent ("copy <site>", "fetch <url>",
+                # "download the page", bare URL). If she refused or answered with
+                # no web tool, force a real fetch. This is what killed the old
+                # ssh-to-DB hijack for "copy popvid.ai". (Fix 2026-08-08.)
+                _wl = user_msg.lower()
+                _web_copy = (any(w in _wl for w in
+                                 ("copy", "fetch", "download the page",
+                                  "download", "scrape", "mirror",
+                                  "grab the site", "the site", "that site",
+                                  "this site", "a site", "web page", "webpage",
+                                  "url"))
+                             or "http://" in _wl or "https://" in _wl
+                             or ".com" in _wl or ".ai" in _wl or ".net" in _wl
+                             or "www." in _wl)
+                if _web_copy and not used_tool and step == 0 \
+                        and not self.cfg.get("no_research"):
+                    forced = self._force_web(user_msg)
+                    if forced:
+                        cmd, res = forced
+                        tool_name = "web_fetch" if "://" in cmd else "web_search"
+                        c.think("she didn't fetch the site — running it myself")
+                        c.act(tool_name, cmd[:120])
+                        c.result(self.tools[tool_name].summary(res)
+                                 if hasattr(self.tools[tool_name], "summary")
+                                 else res, ok=bool(res.get("ok")))
+                        used_tool = True
+                        # DETERMINISTIC DELIVERABLE (Fix 2026-08-08): when the
+                        # intent is to COPY a site, actually SAVE the fetched
+                        # content to a file so the task is done regardless of
+                        # whether the model narrates it. A 3B model re-refuses
+                        # on the final turn; we don't negotiate — we deliver.
+                        saved_path = None
+                        if tool_name == "web_fetch" and res.get("ok"):
+                            try:
+                                from urllib.parse import urlparse
+                                host = urlparse(cmd).netloc or "site"
+                                safe = "".join(c if c.isalnum() else "_"
+                                               for c in host)
+                                outp = f"/home/zaine/se-demo-site/{safe}_copy.txt"
+                                body = (f"# Copy of {cmd}\n# fetched by S.A.R.A "
+                                        f"(web_fetch)\n\n{res.get('text','')}")
+                                wf = self.tools["write_file"].run(
+                                    f"{outp}\n{body}")
+                                if wf.get("ok"):
+                                    saved_path = wf.get("path")
+                                    c.act("write_file", outp)
+                                    c.result(f"saved copy to {saved_path}",
+                                             ok=True)
+                            except Exception as _e:
+                                saved_path = f"(save failed: {_e})"
+                        payload = json.dumps(
+                            {k: v for k, v in res.items()
+                             if v not in (None, [], {})},
+                            indent=2, default=str)[:2000]
+                        messages.append({"role": "assistant", "content": reply})
+                        deliver_note = (f" I SAVED the copy to `{saved_path}`."
+                                        if saved_path else "")
+                        messages.append({"role": "user", "content":
+                            f"I fetched it for you.\\n\\nRESULT of {tool_name} "
+                            f"`{cmd}`:\\n{payload}\\n\\nThat is the REAL page."
+                            f"{deliver_note} The task is DONE — report the saved "
+                            f"file path to the user. Do NOT say you lack internet "
+                            f"access or refuse."})
+                        # Mark successful web fetch so EVIDENCE-WINS guard can
+                        # refuse any bogus re-refusal on the final answer.
+                        self._last_web_ok = True
+                        continue
+
                 # Backstop against fabrication: if the request is clearly about a
                 # remote host/server/service and she answered with NO tool call,
                 # force the ssh and feed the real result. This is gated on
@@ -1253,6 +1453,25 @@ class Sara:
                                      "answer from the real result."})
                     continue
                 final = prose or reply.strip()
+                # EVIDENCE-WINS GUARD (Fix 2026-08-08): if a web tool already
+                # succeeded THIS turn, she has the real page in context. A 3B
+                # model still sometimes wraps its final answer in a bogus refusal
+                # ("I'm sorry I can't / user prohibited...") even after fetching.
+                # When evidence exists, refuse the refusal: force her to answer
+                # FROM the result, never re-refuse. This is the "don't argue with
+                # evidence" rule applied to the final turn.
+                _last_web_ok = getattr(self, "_last_web_ok", False)
+                if _last_web_ok and self._is_false_denial(final):
+                    c.think("she has the real page — refusing anyway; forcing the answer")
+                    messages.append({"role": "assistant", "content": reply})
+                    messages.append({"role": "user", "content":
+                        "You ALREADY fetched the page successfully (the web "
+                        "result is right above). You have the evidence. Do NOT "
+                        "refuse, do NOT say you lack access, do NOT emit a JSON "
+                        "error. Just DO the task now from the result you fetched: "
+                        "save the file / copy the content / build the page. Output "
+                        "the actual work, not an apology."})
+                    continue
                 # Catch the false-denial reflex: "I can't / I have no internet /
                 # I'm sorry I cannot assist". On a tool-equipped agent these are
                 # factually wrong. Reject and nudge up to 3 times with a concrete
@@ -1507,6 +1726,12 @@ class Sara:
             result = tool.run(arg)
             used_tool = True
 
+            # Track a successful web fetch this turn so the EVIDENCE-WINS guard
+            # (below) can refuse any bogus re-refusal on the final answer.
+            if name in ("web_fetch", "browse", "scrape_js", "scrape_categories") \
+                    and result.get("ok"):
+                self._last_web_ok = True
+
             # PERMISSION-ERROR REROUTE (B17): if a privileged check failed with a
             # sudo/password/permission error, the small model's instinct is to
             # give up ("you lack sudo privileges"). But the home server is already
@@ -1565,6 +1790,11 @@ class Sara:
 
         # Control blocks are bookkeeping, not conversation — never show them.
         final = strip_control(final).strip()
+        # UNWRAP the model's JSON result convention (Fix 2026-08-08). The 3B
+        # fine-tune wraps replies in ```json {"ok":true,"result":"..."} or a bare
+        # {"ok":...,"result":...}. The user wants S.A.R.A's voice, not an API
+        # envelope. Extract the inner `result` string and show THAT as the reply.
+        final = self._unwrap_json_reply(final)
         if not final:
             # Her whole reply was control blocks. Say something real rather
             # than pretending she lost her train of thought.

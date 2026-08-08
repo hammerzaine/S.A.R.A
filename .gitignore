@@ -7,3 +7,6 @@ backups/
 __pycache__/
 *.pyc
 *.bak*
+
+# user-requested exclusion
+link.txt

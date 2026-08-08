@@ -1763,12 +1763,126 @@ class UpgradeTool(Tool):
 
 
 # --------------------------------------------------------------------------
+class ServerInventory(Tool):
+    """Enumerate every web site / service / listening port on a remote host.
+
+    One SSH connection runs a comprehensive read-only probe script (web-server
+    binaries, listening ports, Apache vhosts + Alias/ProxyPass, nginx sites,
+    docroots, standalone python services, broken paths) and returns a structured
+    inventory. This is what "study all the sites on the server" needs — NOT a
+    bare `uptime`. The fragile 3B model dodges this task with uptime on the
+    wrong host, so there is a deterministic router (_route_server_inventory)
+    that forces this tool on the right host.
+
+    Arg forms (same friendly-host resolution as SSHRun):
+      <alias>                       e.g. server_inventory website server
+      <user>@<host> :: <command>   NOT used — arg is just the host
+      <host>                       e.g. server_inventory 192.168.2.225
+    Credentials come from ~/.config/systemd or the ssh block of credentials.json
+    (sara_agent_key), falling back to SSHRun's creds.
+    """
+
+    HOST_ALIASES = SSHRun.HOST_ALIASES
+
+    name = "server_inventory"
+    description = (
+        "Inventory every website, service, vhost, listening port and reverse "
+        "proxy on a remote server over SSH. Use this when the user says 'study "
+        "the sites on the server', 'list all the web apps', 'what's running on "
+        "the web box', etc. Returns a structured report: web server, ports, "
+        "Apache vhosts + Alias/ProxyPass, nginx sites, docroots, standalone "
+        "python services, and any broken paths. Accepts friendly host names: "
+        "'website server' = 192.168.2.225, 'database'/'home server' = 192.168.2.140.")
+    usage = (
+        "server_inventory <host>                       e.g. server_inventory website server\n"
+        "    server_inventory 192.168.2.225\n"
+        "    server_inventory root@192.168.2.140")
+
+    PROBE = r'''
+probe(){ echo "PROBE:$(curl -s -o /dev/null -m 6 -w '%{http_code}' -H "Host: ${HOSTNAME:-127.0.0.1}" "http://127.0.0.1$1" 2>/dev/null) ${1}"; }
+echo "=== OS ==="; (cat /etc/os-release 2>/dev/null | grep -E '^(NAME|VERSION)=' | head -2)
+echo "=== WEB SERVER BINS ==="; for b in apache2 apachectl nginx httpd caddy lighttpd; do command -v $b >/dev/null 2>&1 && echo "FOUND: $b ($($b -v 2>&1 | head -1) | hostname=$(hostname))"; done
+echo "=== LISTENING PORTS (web-ish) ==="; (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -E ':(80|443|8080|8000|3000|5000|9000|8443|8888)'
+echo "=== APACHE sites-enabled ==="; ls -1 /etc/apache2/sites-enabled/ 2>/dev/null; ls -1 /etc/nginx/sites-enabled/ 2>/dev/null
+echo "=== APACHE vhost defs ==="; grep -rEni 'DocumentRoot|ServerName|ServerAlias|Alias|VirtualHost|ProxyPass|ProxyPassReverse|Redirect|SSLEngine|Listen' /etc/apache2/sites-enabled/ /etc/apache2/conf-enabled/ 2>/dev/null
+echo "=== NGINX vhost defs ==="; grep -rEni 'server_name|root|listen|location|proxy_pass' /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -60
+echo "=== /var/www tree ==="; ls -la /var/www/ 2>/dev/null; echo "--html--"; ls -la /var/www/html/ 2>/dev/null
+echo "=== STANDALONE SERVICES (python/node) ==="; for p in $(pgrep -f 'python|node|uvicorn|gunicorn' 2>/dev/null); do echo "PID $p: $(tr "\0" " " < /proc/$p/cmdline 2>/dev/null)"; done
+echo "=== DOCKER ==="; docker ps --format '{{.Names}} | {{.Image}} | {{.Ports}}' 2>/dev/null
+echo "=== PROBE PATHS ==="; export HOSTNAME; for p in / /work/ /books/ /mtg/ /mtg_legacy/ /minecraft/ /test/ /p/ /vids/; do probe "$p"; done
+'''
+
+    @staticmethod
+    def _resolve_host(host):
+        if not host:
+            return host
+        return ServerInventory.HOST_ALIASES.get(host.strip().lower(), host)
+
+    def __init__(self):
+        self._cfg = SSHRun._load_creds()
+        # Fall back to sara_agent_key if the ssh block has no explicit key.
+        self._cfg.setdefault("key_path", "~/.ssh/sara_agent_key")
+
+    def run(self, arg: str) -> dict:
+        arg = (arg or "").strip().strip("`\"'")
+        if not arg:
+            return {"ok": False, "error": "need a host — e.g. server_inventory website server"}
+        # Forms: "website server" / "192.168.2.225" / "user@host"
+        user = self._cfg.get("user")
+        host = arg
+        m = re.match(r"^([\w.-]+)@(.+)$", arg)
+        if m:
+            user, host = m.group(1), m.group(2)
+        host = self._resolve_host(host)
+        key = os.path.expanduser(self._cfg.get("key_path", "~/.ssh/sara_agent_key"))
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            kwargs = {"hostname": host,
+                      "port": int(self._cfg.get("port", 22)),
+                      "username": user, "timeout": 30,
+                      "look_for_keys": False, "allow_agent": False}
+            if os.path.exists(key):
+                kwargs["key_filename"] = key
+            else:
+                pw = self._cfg.get("password")
+                if not pw:
+                    return {"ok": False,
+                            "error": "no SSH key and no password in creds"}
+                kwargs["password"] = pw
+            client.connect(**kwargs)
+        except Exception as e:
+            return {"ok": False, "error": f"ssh connect to {user}@{host} failed: {e}"}
+        try:
+            stdin, stdout, stderr = client.exec_command(
+                "bash -s", timeout=120)
+            stdin.write(self.PROBE)
+            stdin.close()
+            out = stdout.read().decode(errors="replace")
+            err = stderr.read().decode(errors="replace")
+            rc = stdout.channel.recv_exit_status()
+            return {"ok": True, "host": f"{user}@{host}", "exit_code": rc,
+                    "stdout": out, "stderr": err[:800], "error": None}
+        except Exception as e:
+            return {"ok": False, "error": f"ssh exec failed: {e}"}
+        finally:
+            client.close()
+
+    def summary(self, r: dict) -> str:
+        if not r.get("ok"):
+            return f"inventory failed: {r.get('error')}"
+        lines = (r.get("stdout") or "").strip().splitlines()
+        return f"inventory of {r.get('host')}: {len(lines)} lines collected"
+
+
 def build_registry(confirm=None) -> dict:
     tools = [ListDir(), FindPath(), ReadFile(), WriteFile(), AppendFile(),
              Shell(confirm=confirm), WebSearch(), WebFetch(),
              ScrapeCategories(), ScrapeJS(), WebBrowse(),
              MariaDB(), SSHRun(), WinRun(), DBImport(), SeeImage(),
-             ConfigTool(), ModelList(), UpgradeTool(), Rewrite()]
+             ConfigTool(), ModelList(), UpgradeTool(), Rewrite(),
+             ServerInventory()]
     return {t.name: t for t in tools}
 
 
