@@ -693,7 +693,10 @@ class Sara:
 
         try:
             cmd = f"{user}@{host} :: {remote}"
-            return cmd, self.tools["ssh_run"].run(remote)
+            # BUG FIX: previously ran `remote` (just the command, e.g. "hostname")
+            # which DROPPED the host and fell back to the default creds host
+            # (.140 / database). Must run `cmd` which carries user@host :: command.
+            return cmd, self.tools["ssh_run"].run(cmd)
         except Exception as e:                                # noqa: BLE001
             return cmd, {"ok": False, "error": f"{type(e).__name__}: {e}"}
 

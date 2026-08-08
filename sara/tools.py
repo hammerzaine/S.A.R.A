@@ -1284,14 +1284,32 @@ class SSHRun(Tool):
         #   "host :: command"        host only (default user from creds)
         #   "alias :: command"       friendly name (website server -> .225)
         #   "command"                default host from creds
-        m = re.match(r"^(?:([\w.-]+)@)?([\w.\- ]+?)\s*::\s*(.+)$", arg, re.S)
+        # Target forms (user@ optional; friendly aliases supported):
+        #   "user@host :: command"   explicit host/user, '::' separator
+        #   "user@host: command"     single ':' (the model emits this a lot)
+        #   "user@host command"       bare whitespace separator
+        #   "host :: command"        host only (default user from creds)
+        #   "alias :: command"       friendly name (website server -> .225)
+        #   "command"                default host from creds
+        # The old parser ONLY accepted '::', so any other form silently fell
+        # through to the DEFAULT creds host and IGNORED the explicit target
+        # (e.g. "root@192.168.2.225 hostname" connected to .140). That is a
+        # silent wrong-host bug — fixed by accepting : / :: / whitespace.
+        m = re.match(
+            r"^(?:([\w.-]+)@)?([\w.\- ]+?)\s*(?:::?|\s+)\s*(.+)$", arg, re.S)
         if m:
             if m.group(1):
                 user = m.group(1)
             host = m.group(2).strip()
             command = m.group(3).strip()
         else:
-            command = arg
+            # No separator at all: maybe "user@host" then command ran together,
+            # or just a bare command. Split off a leading user@host token.
+            tm = re.match(r"^([\w.-]+)@([\w.\-]+)\s+(.+)$", arg, re.S)
+            if tm:
+                user, host, command = tm.group(1), tm.group(2), tm.group(3).strip()
+            else:
+                command = arg
         # Resolve friendly host names to real IPs (website server -> .225 etc.)
         host = self._resolve_host(host)
         key = os.path.expanduser(self._cfg.get("key_path", "~/.ssh/sara_agent_key"))
