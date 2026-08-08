@@ -887,6 +887,86 @@ class Sara:
         branch = bm.group(1) if bm else "main"
         return f"{url} {branch}"
 
+    def _route_evolve(self, user_msg: str) -> str | None:
+        """Evolution lever. Returns the sentinel '__evolve__' when the user
+        clearly wants S.A.R.A to improve/evolve/upgrade herself. Drives a
+        self-report (version, learned skills, facts, upgrade availability) and
+        — if an upgrade is pending — applies it automatically (backup-first,
+        rollback-safe via sara_upgrade.py). One word -> self-improvement.
+
+        Triggers on: 'evolve', '/evolve', 'improve yourself', 'update
+        yourself', 'get better', 'self-improve', 'level up'.
+        """
+        low = user_msg.lower().strip()
+        triggers = ("evolve", "/evolve", "improve yourself", "update yourself",
+                    "get better", "self-improve", "level up", "upgrade yourself")
+        if not any(t in low for t in triggers):
+            return None
+        # Don't hijack an explicit "upgrade <url>" — let _route_upgrade own that.
+        if "upgrade" in low and ("http" in low or "git@" in low
+                                 or "ssh://" in low):
+            return None
+        return "__evolve__"
+
+    def _do_evolve(self) -> str:
+        """Evolution self-report. S.A.R.A grows by WRITING TO HER OWN
+        SOUL.md (personality / self-knowledge) and HER MEMORY (skills + facts
+        DB) — she NEVER writes or edits her own source code. This report
+        shows her current growth state and reminds her she can extend SOUL.md
+        and memory at any time. A pending CODE upgrade (if any) is noted but
+        NOT auto-applied — that stays a deliberate /upgrade you trigger.
+        """
+        skills = self.memory.find_skills("")
+        skill_count = len(skills)
+        facts = self.memory.facts(200)
+        import sara as _s
+        ver = _s.__version__
+        lines = [f"Evolution report — S.A.R.A v{ver}",
+                 f"  Learned skills : {skill_count}",
+                 f"  Remembered facts: {len(facts)}",
+                 "  How I evolve (no source-code edits, ever):",
+                 "    - I extend my SOUL.md (personality + self-knowledge)",
+                 "      via the edit_soul tool.",
+                 "    - I grow my memory (skills + facts) every turn via",
+                 "      the LEARNED:/REMEMBER: blocks — they persist and are",
+                 "      recalled next session.",
+                 "    - My memory + SOUL.md survive code upgrades."]
+        up = getattr(self, "_upgrade", None)
+        if up and up.get("available"):
+            lines.append(f"  Code upgrade available (remote "
+                         f"{up.get('latest_commit','?')[:8]}) — say '/upgrade'"
+                         " to pull it. I won't apply it on my own.")
+        else:
+            lines.append("  Code upgrade: none pending (you're current).")
+        return "\n".join(lines)
+
+    def _route_edit_soul(self, user_msg: str) -> str | None:
+        """Deterministic router for 'edit my soul' / 'grow your personality' /
+        'add to your soul file' — writes to SOUL.md (her personality /
+        self-knowledge) so she can EVOLVE without touching source code. Returns
+        the full edit_soul arg when the intent is clear, else None. The model
+        often botches in-place file edits, so we force the tool directly.
+        """
+        low = user_msg.lower()
+        intent = ("edit your soul" in low or "edit my soul" in low
+                  or "grow your soul" in low or "grow your personality" in low
+                  or "update your soul" in low or "change your soul" in low
+                  or "add to your soul" in low or "evolve your soul" in low
+                  or "edit soul" in low or "rewrite your soul" in low)
+        if not intent:
+            return None
+        # Pass the whole message through as the edit spec; the tool parses
+        # append/replace modes. Strip the triggering phrase so it isn't
+        # written into the file.
+        import re as _re
+        cleaned = user_msg
+        for phrase in ("edit your soul", "edit my soul", "grow your soul",
+                       "grow your personality", "update your soul",
+                       "change your soul", "add to your soul",
+                       "evolve your soul", "edit soul", "rewrite your soul"):
+            cleaned = _re.sub(phrase, "", cleaned, flags=_re.I)
+        return cleaned.strip()
+
     def _route_identity(self, user_msg: str) -> str | None:
         """Deterministic identity router.
 
@@ -1161,6 +1241,29 @@ class Sara:
             else:
                 return (f"Upgrade did not complete: "
                         f"{res.get('error') or (res.get('output') or '')[:400]}")
+
+        # DETERMINISTIC EVOLVE ROUTER — 'evolve' / 'improve yourself' / etc.
+        # She grows via SOUL.md + memory (never her source code). Report state,
+        # and note (but do NOT auto-apply) a pending code upgrade.
+        routed_ev = self._route_evolve(user_msg)
+        if routed_ev == "__evolve__":
+            c.act("evolve", "self-report")
+            return self._do_evolve()
+
+        # DETERMINISTIC EDIT-SOUL ROUTER — 'edit your soul' / 'grow your
+        # personality' writes to SOUL.md so she can evolve her voice without
+        # touching source. Forced tool call (model botches in-place edits).
+        routed_soul = self._route_edit_soul(user_msg)
+        if routed_soul:
+            c.act("edit_soul", routed_soul[:120])
+            res = self.tools["edit_soul"].run(routed_soul)
+            c.result(self.tools["edit_soul"].summary(res),
+                     ok=bool(res.get("ok")))
+            if res.get("ok"):
+                return ("Updated my SOUL.md — that's me evolving. "
+                        "It's preserved across code upgrades.")
+            return (f"Couldn't update SOUL.md: "
+                    f"{res.get('error') or (res.get('output') or '')[:300]}")
 
         # DETERMINISTIC IDENTITY ROUTER — when the user asks WHO she is, answer
         # from SOUL.md + PROTOCOL, never from the fragile 3B model and NEVER via

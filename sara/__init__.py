@@ -10,5 +10,5 @@ Design goals (why this exists, so future maintainers don't undo them):
   4. Personality   — she reads as a person, not a command parser.
 """
 
-__version__ = "3.2.5"
+__version__ = "3.2.6"
 __all__ = ["Sara"]

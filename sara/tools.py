@@ -370,6 +370,81 @@ class PatchFile(Tool):
                 if r.get("ok") else r.get("error"))
 
 
+class EditSoul(Tool):
+    """Grow S.A.R.A's own personality / self-knowledge file (SOUL.md).
+
+    This is how she EVOLVES her voice and self-understanding over time —
+    WITHOUT touching her source code. Two modes:
+
+      edit_soul append
+      <text to add at the end of SOUL.md>
+
+      edit_soul replace
+      <<<OLD>>>
+      <exact existing block to replace>
+      <<<NEW>>>
+      <replacement block>
+      <<<END>>>
+
+    The file lives at the agent root (SOUL.md). It is preserved across code
+    upgrades (sara_upgrade.py treats it as PROTECTED), so evolution sticks.
+    """
+    name = "edit_soul"
+    description = ("Edit S.A.R.A's own SOUL.md (personality + self-knowledge) "
+                   "so she can evolve her voice and self-understanding. Append "
+                   "a new section, or replace an existing block in place.")
+    usage = ("edit_soul append\\n<text to add>\\n"
+             "  -- or --\\n"
+             "edit_soul replace\\n<<<OLD>>>\\n<exact block>\\n<<<NEW>>>\\n"
+             "<replacement>\\n<<<END>>>")
+
+    def run(self, arg: str) -> dict:
+        import re as _re
+        cleaned = (arg or "").strip()
+        if "\n" not in cleaned and "\\n" in cleaned:
+            cleaned = cleaned.replace("\\n", "\n", 1)
+        # locate SOUL.md relative to this file's repo root
+        root = Path(__file__).resolve().parent.parent
+        soul = root / "SOUL.md"
+        if not soul.exists():
+            return {"ok": False, "error": "SOUL.md not found at " + str(root)}
+        head, _, rest = cleaned.partition("\n")
+        mode = head.strip().lower()
+        try:
+            text = soul.read_text()
+        except OSError as e:
+            return {"ok": False, "error": str(e)}
+        if mode == "append":
+            add = rest.strip("\n")
+            if not add:
+                return {"ok": False, "error": "need text to append"}
+            sep = "" if text.endswith("\n") else "\n"
+            new_text = text + sep + add + "\n"
+            soul.write_text(new_text)
+            return {"ok": True, "path": str(soul),
+                    "mode": "append", "bytes": len(add)}
+        if mode == "replace":
+            m = _re.search(r"<<<\s*OLD\s*>>>\s*(.*?)\s*<<<\s*NEW\s*>>>\s*(.*?)"
+                           r"\s*<<<\s*END\s*>>>", rest, _re.S)
+            if not m:
+                return {"ok": False,
+                        "error": "replace mode needs <<<OLD>>>…<<<NEW>>>…<<<END>>>"}
+            old, new = m.group(1), m.group(2)
+            if old not in text:
+                return {"ok": False,
+                        "error": "OLD block not found verbatim in SOUL.md"}
+            text = text.replace(old, new, 1)
+            soul.write_text(text)
+            return {"ok": True, "path": str(soul),
+                    "mode": "replace", "bytes": len(new)}
+        return {"ok": False,
+                "error": "first line must be 'append' or 'replace'"}
+
+    def summary(self, r):
+        return (f"SOUL.md {r.get('mode')}: +{r.get('bytes')} bytes"
+                if r.get("ok") else r.get("error"))
+
+
 class Shell(Tool):
     name = "shell"
     description = "Run a read-only shell command and return its output."
@@ -1942,7 +2017,7 @@ echo "=== PROBE PATHS ==="; export HOSTNAME; for p in / /work/ /books/ /mtg/ /mt
 
 def build_registry(confirm=None) -> dict:
     tools = [ListDir(), FindPath(), ReadFile(), WriteFile(), AppendFile(),
-             PatchFile(),
+             PatchFile(), EditSoul(),
              Shell(confirm=confirm), WebSearch(), WebFetch(),
              ScrapeCategories(), ScrapeJS(), WebBrowse(),
              MariaDB(), SSHRun(), WinRun(), DBImport(), SeeImage(),
