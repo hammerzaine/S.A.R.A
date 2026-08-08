@@ -10,3 +10,6 @@ __pycache__/
 
 # user-requested exclusion
 link.txt
+
+# demo site (not part of agent package)
+se-demo-site/

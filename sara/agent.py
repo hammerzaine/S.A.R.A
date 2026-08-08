@@ -57,10 +57,10 @@ PROVIDERS = {
     "qwen-oauth": "https://dashscope.aliyuncs.com/compatible-mode/v1",
 }
 DEFAULT_CONFIG = {
-    "provider": "ollama",
-    "base_url": PROVIDERS["ollama"],
-    "model": "qwen2.5:7b-instruct-q4_K_M",
-    "fallback_models": ["llama3.1:8b", "S.A.R.A-v3b:latest"],
+    "provider": "nous",
+    "base_url": PROVIDERS["nous"],
+    "model": "stepfun/step-3.7-flash:free",
+    "fallback_models": ["stepfun/step-3.5-flash:free"],
     "api_key": "",
     "max_steps": 6,
     "verbose": True,
@@ -1540,9 +1540,13 @@ class Sara:
                         messages.append({"role": "assistant", "content": reply})
                         messages.append({"role": "user", "content":
                             f"I searched for you.\n\nRESULT of web_search "
-                            f"`{cmd}`:\n{payload}\n\nThat is the REAL information. "
-                            f"Answer ONLY from this result. Do NOT invent any "
-                            f"facts (wrong publisher, wrong year, made-up names)."})
+                            f"`{cmd}`:\n{payload}\n\nThe user asked a "
+                            f"QUESTION — answer it from these results. Explain the "
+                            f"method or facts. CRITICAL: you did NOT perform any "
+                            f"action, so NEVER say you 'downloaded', 'saved', "
+                            f"'created', 'installed', or 'fetched' a file. Do NOT "
+                            f"invent file paths or claim success. Just answer the "
+                            f"question in plain text from the results above."})
                         continue
 
                 # Backstop: WEB-COPY / FETCH intent ("copy <site>", "fetch <url>",
@@ -1657,6 +1661,44 @@ class Sara:
                                      "answer from the real result."})
                     continue
                 final = prose or reply.strip()
+                # FABRICATION GUARD: if the answer claims a file was saved /
+                # downloaded / created / installed but NO write tool (write_file,
+                # append_file, send_file, ssh_run, shell) actually ran THIS turn,
+                # that's an invented success — reject and force a real answer. A 3B
+                # model confidently says "I downloaded X and saved it to /home/..."
+                # after a mere web_search. That is lying.
+                # Robust detection (not whack-a-mole on phrasing):
+                #   - claims a LOCAL path (/home/, /tmp/, /var/, ~/...) she
+                #     supposedly created, OR
+                #   - uses a save/download/create/install verb about herself.
+                # Search results reference URLs, never local paths, so a local-path
+                # claim with no write tool is always a fabrication.
+                _fab_low = final.lower()
+                _fab_local_path = any(p in final for p in
+                                      ("/home/", "/tmp/", "/var/", "~/",
+                                       "/root/", "/srv/"))
+                _fab_verb = any(w in _fab_low for w in
+                                ("i downloaded", "i saved", "i created",
+                                 "i installed", "i have downloaded", "i've downloaded",
+                                 "i fetched", "was saved as", "result was saved",
+                                 "saved the result", "saved it to", "created the file",
+                                 "created a file", "successfully downloaded",
+                                 "i wrote", "i've saved", "i have saved"))
+                if (_fab_local_path or _fab_verb) and not used_tool \
+                        and step < self.cfg.get("max_steps", 6) - 1:
+                    c.think("she claimed she saved/downloaded/created a file but "
+                            "ran no write tool — fabrication, forcing a real answer")
+                    messages.append({"role": "assistant", "content": reply})
+                    messages.append({"role": "user", "content":
+                        "You claimed you downloaded/saved/created a file (or "
+                        "referenced a local path like /home/...), but you did NOT "
+                        "run any tool that writes a file this turn — you only "
+                        "searched the web. That is a fabrication. Do NOT claim you "
+                        "performed an action you didn't. Simply ANSWER the user's "
+                        "question in plain text from the search results (explain the "
+                        "method or give the facts). No invented file paths, no fake "
+                        "success."})
+                    continue
                 # EVIDENCE-WINS GUARD (Fix 2026-08-08): if a web tool already
                 # succeeded THIS turn, she has the real page in context. A 3B
                 # model still sometimes wraps its final answer in a bogus refusal

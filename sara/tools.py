@@ -192,11 +192,12 @@ class Rewrite(Tool):
             from pathlib import Path as _P
             cfg_path = _P(__file__).resolve().parent.parent / "config.json"
             _cfg = json.loads(cfg_path.read_text())
-            base_url = _cfg.get("base_url", "http://127.0.0.1:11434/v1")
-            model = _cfg.get("model", "S.A.R.A-v3b:latest")
+            base_url = _cfg.get("base_url", "https://portal.nousresearch.com/v1")
+            model = _cfg.get("model", "stepfun/step-3.7-flash:free")
             api_key = _cfg.get("api_key", "")
         except Exception:
-            base_url, model, api_key = "http://127.0.0.1:11434/v1", "S.A.R.A-v3b:latest", ""
+            base_url, model, api_key = ("https://portal.nousresearch.com/v1",
+                                        "stepfun/step-3.7-flash:free", "")
 
         req_stop = set(("rewrite", "make", "professional", "polish", "restyle",
                         "summarize", "edit", "this", "that", "please", "story"))

@@ -1,0 +1,18 @@
+{
+  "provider": "nous",
+  "base_url": "https://portal.nousresearch.com/v1",
+  "model": "stepfun/step-3.7-flash:free",
+  "fallback_models": [
+    "stepfun/step-3.5-flash:free"
+  ],
+  "api_key": "",
+  "max_steps": 12,
+  "verbose": true,
+  "no_research": false,
+  "timeout": 300,
+  "_note": "Verified on this box (8GB GPU). S.A.R.A-v3b: ~7s warm, reliably emits ACTION. qwen2.5:7b: ~4min per turn AND got the path wrong - worse, not better. No local model reliably transcribes a long tool result verbatim, so the agent appends ground truth itself (see agent.py _ground_truth).",
+  "_alternatives": [
+    "qwen2.5:7b-instruct-q4_K_M",
+    "llama3.1:8b"
+  ]
+}
