@@ -136,7 +136,8 @@ class Ask(BaseModel):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC / "index.html",
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/status")
@@ -170,6 +171,26 @@ def status():
         "memories": _sara.memory.facts(60),
         "tools": sorted(_sara.tools.keys()),
     }
+
+
+@app.get("/api/models")
+def models():
+    """List models from the configured endpoint WITHOUT going through the
+    chat loop. The 'List models' button used POST /api/ask 'list_models',
+    which let the small local model re-invoke the tool forever and hang the
+    UI on 'loading…'. This returns the list directly."""
+    try:
+        from sara.tools import ModelList
+        res = ModelList(ROOT).run("")
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error", "unknown error"),
+                    "models": [], "current": None}
+        return {"ok": True, "models": res.get("models", []),
+                "current": res.get("current"),
+                "base_url": res.get("base_url")}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "models": [], "current": None}
 
 
 class Rename(BaseModel):

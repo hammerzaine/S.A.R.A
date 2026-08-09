@@ -5,13 +5,8 @@ visible reasoning, persistent memory, and a web UI. This bundle installs it on
 **Linux, macOS, and Windows** with one command.
 
 ## What's in the box
-- `sara.py`            — unified launcher (CLI + web)
-- `sara_cli.py`        — interactive terminal client
-- `web.py`             — FastAPI web UI (SSE streaming)
-- `sara/`              — the agent core (agent loop, LLM client, tools, memory)
-- `sara_upgrade.py`    — safe git-based self-upgrade toolkit
-- `web/`               — the browser UI assets
-- `install-bundle/`    — the OS install scripts + requirements
+- `install-bundle/`    — the OS install scripts + requirements + self-contained source
+- `install-bundle/src/` — bundled `sara.py`, `sara/`, and `web/` (so a bare copy installs with no network/SSH)
 
 ## Install (one command per OS)
 
@@ -26,9 +21,50 @@ powershell -ExecutionPolicy Bypass -File install-bundle\install.ps1
 ```
 
 Each installer:
-1. creates a local `.venv` (no system-Python changes),
-2. installs dependencies from `install-bundle/requirements.txt`,
-3. writes a `bin/sara` (or `bin\sara.bat`) launcher.
+1. verifies that `sara.py`, `sara/`, and `web/` exist in the install dir,
+2. if not, bootstraps them from `install-bundle/src` (always present) or another local source bundle,
+3. creates a local `.venv` (no system-Python changes),
+4. installs dependencies from `install-bundle/requirements.txt`,
+5. writes a `bin/sara` (or `bin\\sara.bat`) launcher.
+
+The bundle is **self-contained**: `install-bundle/src` ships the full source, so
+`bash install-bundle/install.sh` works from a bare `install-bundle/` copy with
+no network access and no SSH to any server.
+
+### Machine-readable source-bundle lookup order
+
+When the installer needs to bootstrap core files, it checks these paths in order
+and copies `sara.py`, `sara/`, and `web/` from the first match:
+
+- `install-bundle/src`  ← bundled, always present
+- `~/SARA`
+- `~/sara`
+- `.upgrade_tmp`
+- `dist-clean`
+- `../SARA`
+- `../sara`
+- `/srv/SARA`
+- `/srv/sara`
+- `/opt/SARA`
+- `/opt/sara`
+
+If nothing is found, the installer prints the missing-file checklist and exits.
+
+### Shared server path (optional, same-machine/LAN NFS only)
+
+For setups where the source repo lives on a server filesystem that users can read
+but should not SSH into, expose it at `/srv/SARA`. The bundled installer already
+checks that path. Permissions on `/srv/SARA` should be world-readable:
+
+```bash
+sudo mkdir -p /srv/SARA
+sudo git clone /path/to/SARA /srv/SARA
+sudo chmod -R a+rX /srv/SARA
+```
+
+Note: `/srv/SARA` only helps if that path is already visible on the target
+machine (shared mount or same host). It does NOT reach across the network on its
+own — that's what `install-bundle/src` is for.
 
 ## Run
 ```bash
@@ -49,8 +85,8 @@ bin/sara status          # model / connection check
 {
   "provider": "nous",
   "base_url": "https://portal.nousresearch.com/v1",
-  "model": "stepfun/step-3.7-flash:free",
-  "fallback_models": ["stepfun/step-3.5-flash:free"]
+  "model": "tencent/hy3:free",
+  "fallback_models": ["stepfun/step-3.7-flash:free"]
 }
 ```
 Edit `config.json` to swap providers or point at a local Ollama if you prefer.

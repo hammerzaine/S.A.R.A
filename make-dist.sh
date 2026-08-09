@@ -33,7 +33,18 @@ git -C "$SRC" archive --format=tar HEAD | tar -x -C "$DIST"
 [ -f "$SRC/sara.py" ] && cp "$SRC/sara.py" "$DIST/sara.py"
 
 # 4) copy the install bundle (not committed -> add manually)
-[ -d "$SRC/install-bundle" ] && cp -r "$SRC/install-bundle" "$DIST/install-bundle"
+#    Use "install-bundle/." so it MERGES into the existing dir instead of nesting.
+[ -d "$SRC/install-bundle" ] && cp -r "$SRC/install-bundle/." "$DIST/install-bundle"
+
+# 4b) ensure the install bundle is self-contained: ship a fresh src/ copy,
+#     stripped of build junk (.bak-*, __pycache__) so a bare install-bundle
+#     copy can bootstrap sara.py / sara/ / web/ with no network or SSH.
+mkdir -p "$DIST/install-bundle/src"
+[ -f "$SRC/sara.py" ] && cp "$SRC/sara.py" "$DIST/install-bundle/src/sara.py"
+rm -rf "$DIST/install-bundle/src/sara" "$DIST/install-bundle/src/web"
+cp -r "$SRC/sara" "$DIST/install-bundle/src/sara"
+cp -r "$SRC/web" "$DIST/install-bundle/src/web"
+find "$DIST/install-bundle/src" \( -name '*.bak-*' -o -name '__pycache__' \) -exec rm -rf {} + 2>/dev/null || true
 
 # 5) blank SOUL.md (personality ships empty; set your own or let her learn)
 : > "$DIST/SOUL.md"
