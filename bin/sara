@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# S.A.R.A launcher — activates the venv and runs the unified entry point.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$HERE/.venv/bin/activate"
+exec python "$HERE/sara.py" "$@"

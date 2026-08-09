@@ -248,6 +248,29 @@ def _verify() -> tuple[bool, str]:
     return True, "verified"
 
 
+def _fix_launcher_perms() -> None:
+    """Re-apply +x to the launcher after a copy/pull.
+
+    A fresh clone or a /upgrade copy can drop the executable bit on
+    ``bin/sara`` (and the ``~/.local/bin/sara`` symlink), leaving the user
+    with ``Permission denied`` when they run ``sara``. Re-assert it so pulls
+    self-heal. Never raises - best-effort, runs at upgrade time.
+    """
+    import os
+    import stat
+    candidates = [ROOT / "bin" / "sara"]
+    local_bin = Path.home() / ".local" / "bin" / "sara"
+    if local_bin.exists():
+        candidates.append(local_bin)
+    for c in candidates:
+        try:
+            if c.exists() and not c.is_dir():
+                st = c.stat().st_mode
+                c.chmod(st | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        except OSError:
+            pass
+
+
 def upgrade(repo_url: str, branch: str = "main",
             new_version: str | None = None) -> int:
     # Allow a bare remote NAME (e.g. "origin") instead of a full URL — resolve
@@ -288,6 +311,9 @@ def upgrade(repo_url: str, branch: str = "main",
         dst.write_bytes(src.read_bytes())
         copied += 1
     print(f"      copied {copied} files")
+    # Ensure the launcher is executable after a copy — a fresh clone / pull
+    # can drop the +x bit, leaving `sara` as "Permission denied". B34.
+    _fix_launcher_perms()
 
     ver_after = get_version()
     if new_version:
