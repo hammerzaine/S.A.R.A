@@ -212,12 +212,17 @@ def _verify() -> tuple[bool, str]:
     try:
         req = urllib.request.Request(
             "http://127.0.0.1:8800/api/ask",
-            data=json.dumps({"message": "reply with the single word: OK"}).encode(),
+            data=json.dumps({"message": "What is 2+2? Reply with just the number."}).encode(),
             headers={"Content-Type": "application/json"})
         raw = urllib.request.urlopen(req, timeout=120).read().decode()
-        ok = "OK" in raw
+        # Robust health check: the turn completed (SSE `done` event) and did
+        # not error out. Requiring the literal word "OK" was fragile — a small
+        # model often paraphrases ("Sure, OK." / wanders) and the check would
+        # fail even though the service is healthy. We only care that the agent
+        # responded without crashing.
+        ok = ("\"type\": \"done\"" in raw) and ("\"type\": \"error\"" not in raw)
         if not ok:
-            return False, "smoke turn did not return OK"
+            return False, "smoke turn did not return a clean done event"
     except Exception as e:  # noqa: BLE001
         return False, f"smoke turn failed: {e}"
     return True, "verified"

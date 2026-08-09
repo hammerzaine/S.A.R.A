@@ -1906,6 +1906,12 @@ class Sara:
                     step=step, messages=messages, user_msg=user_msg)
                 if cont:
                     continue
+                # No action AND no guard fired (not a correction, not a forced
+                # tool) -> there is nothing to execute this step. Re-loop so the
+                # model gets another turn instead of falling through to
+                # `name, arg = action` with action=None (crashes: "cannot unpack
+                # non-iterable NoneType").
+                continue
 
             # Narrate intent BEFORE acting — this is the transparency contract.
             if prose:
