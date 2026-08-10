@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - readline is stdlib on Linux
 
 from sara.agent import Sara
 from sara.console import Console
+from sara.version_check import start_version_watch
 
 HISTFILE = Path.home() / ".sara_history"
 
@@ -74,10 +75,14 @@ def show_splash(sara: Sara, console: Console) -> None:
                    skills=sara.memory.all_skills(),
                    facts=st["facts"],
                    online=st["online"],
-                   commands=COMMANDS)
+                   commands=COMMANDS,
+                   version=st.get("version", "unknown"))
     if not st["online"]:
         console.warn(f"the model at {sara.cfg['base_url']} isn't answering — "
                      "start it with:  ollama serve")
+    up = getattr(sara, "_upgrade", None) or {}
+    if up.get("available"):
+        console.info("★ a newer version is available — type /upgrade to pull it")
 
 
 def main() -> int:
@@ -87,6 +92,11 @@ def main() -> int:
     except Exception as e:
         console.error(f"couldn't start: {e}")
         return 1
+
+    # Startup upgrade check + hourly re-check (offline-safe, background thread).
+    # The first check runs synchronously so /status and the splash can show
+    # "upgrade available" immediately when one exists.
+    start_version_watch(lambda r: setattr(sara, "_upgrade", r))
 
     # One-shot mode
     if len(sys.argv) > 1:

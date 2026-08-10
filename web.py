@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from sara.agent import Sara
 from sara.console import Console
-from sara.version_check import check_for_upgrade
+from sara.version_check import start_version_watch
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "web"
@@ -103,21 +103,11 @@ _sink: queue.Queue = queue.Queue()
 _console = EventConsole(_sink)
 _sara = Sara(console=_console)
 
-# Startup self-upgrade check (offline-safe). Runs once at boot, never blocks.
-# Stores the result on the agent so /api/status can report it. Compares the
-# local git HEAD against the remote 'main' HEAD (works for private repos via
-# the existing deploy key — no token needed).
-try:
-    import subprocess as _sp
-    _local_commit = _sp.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-        timeout=10, cwd=str(ROOT),
-    ).stdout.strip() or None
-    _sara._upgrade = check_for_upgrade(_local_commit)
-except Exception as _e:  # never let version-check break startup
-    _sara._upgrade = {"available": False, "local_commit": None,
-                      "latest_commit": None, "checked": False,
-                      "error": str(_e), "remote": "origin"}
+# Startup self-upgrade check (offline-safe). Runs once now, then re-checks
+# every hour on a daemon thread, storing the latest result on the agent so
+# /api/status can report it. Compares the local git HEAD against the remote
+# 'main' HEAD (works for private repos via the existing deploy key / PAT).
+start_version_watch(lambda r: setattr(_sara, "_upgrade", r))
 
 # Announce at boot (goes to the service journal / stdout).
 _up = _sara._upgrade or {}
@@ -149,7 +139,7 @@ def status():
     cfg = _sara.get_config().get("config", {})
     return {
         "name": "S.A.R.A",
-        "subtitle": "Smart AI Research Assistant",
+        "subtitle": "Smart AI Resource Assistant",
         "version": st.get("version", "unknown"),
         "provider": st.get("provider", "ollama"),
         "base_url": st.get("base_url"),

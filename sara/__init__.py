@@ -1,4 +1,4 @@
-"""S.A.R.A — Smart AI Research Assistant.
+"""S.A.R.A — Smart AI Resource Assistant.
 
 A JARVIS-style conversational agent with visible reasoning, persistent memory,
 web-backed self-teaching, and observable skill growth.

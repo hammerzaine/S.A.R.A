@@ -85,7 +85,8 @@ class Console:
 
     # -- splash ------------------------------------------------------------
     def splash(self, model: str, skills: list[dict], facts: int,
-               online: bool, commands: list[tuple[str, str]]) -> None:
+               online: bool, commands: list[tuple[str, str]],
+               version: str = "unknown") -> None:
         w = term_width()
         inner = w - 4
 
@@ -104,9 +105,10 @@ class Console:
 
         # Wordmark
         title = "S . A . R . A"
-        sub = "Smart AI Research Assistant"
+        sub = "Smart AI Resource Assistant"
         row(self._c(title.center(inner), CYAN + BOLD))
         row(self._c(sub.center(inner), GREY))
+        row(self._c(self._c(f"v{version}", GREY_D).center(inner), GREY_D))
         row()
 
         # Status strip

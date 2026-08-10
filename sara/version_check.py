@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -143,3 +145,46 @@ def check_for_upgrade(local_commit: str | None = None) -> dict:
 
     result["error"] = "could not reach any remote (offline? no token?)"
     return result
+
+
+def _local_commit() -> str | None:
+    """Best-effort local git HEAD; None when not a git work tree (e.g. a
+    bare extracted install bundle)."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+            timeout=_TIMEOUT, cwd=str(_repo_root()),
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def start_version_watch(on_result, interval: int = 3600) -> threading.Thread | None:
+    """Run an upgrade check once now, then every ``interval`` seconds, in a
+    background daemon thread. Each result (a dict from ``check_for_upgrade``)
+    is handed to ``on_result`` so the caller can store it on the agent.
+
+    OFFLINE-SAFE: any failure is swallowed by ``check_for_upgrade`` and
+    reported as ``available=False`` — this never raises and never blocks
+    startup. Returns the thread (already started) or None if threading is
+    available. The first check runs synchronously so ``/api/status`` and the
+    splash have a result immediately at boot.
+    """
+    def tick() -> None:
+        try:
+            on_result(check_for_upgrade(_local_commit()))
+        except Exception:
+            pass
+
+    tick()  # first check now (synchronous, fast — timeouts are 15s max)
+
+    def loop() -> None:
+        while True:
+            time.sleep(interval)
+            tick()
+
+    t = threading.Thread(target=loop, name="sara-version-watch", daemon=True)
+    t.start()
+    return t
+
