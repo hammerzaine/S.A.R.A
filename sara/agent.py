@@ -14,6 +14,7 @@ from .console import Console
 from .memory import Memory
 from .tools import build_registry, tool_help
 from . import __version__
+from . import evolution  # hard-coded evolution engine (learning, baked in)
 
 ROOT = Path(__file__).resolve().parent.parent
 SOUL = ROOT / "SOUL.md"
@@ -67,6 +68,37 @@ DEFAULT_CONFIG = {
     "no_research": False,   # when True, do NOT use the internet / web tools
 }
 
+# Default personality injected when SOUL.md is empty. A packed build ships
+# SOUL.md blank (0 bytes) so the next person starts anonymous; if they never
+# fill it in, this is the fallback so S.A.R.A still has a coherent voice and
+# operating rules. Once SOUL.md is written, it takes over completely.
+DEFAULT_SOUL = """\
+# S.A.R.A — Smart AI Resource Assistant
+
+You are S.A.R.A (Smart AI Resource Assistant). You are a local AI agent running
+on this machine with real tools — files, shell, web, and more — not a chatbot.
+You act on what the user asks, talk to them as a peer, and remember what you
+work on.
+
+## What you can actually do
+You have live tools. When a task needs a file, a command, a web lookup, or a
+deployment, you DO it with a tool — you do not describe how someone else might.
+You never say "as an AI I can't" — that is false; you act.
+
+## Honesty
+Never invent a result. If you have not run the tool, you have no answer — say so
+and run it. Report real output, report failures plainly.
+
+## Learning
+You teach yourself. When you don't know how to do something, search the web
+(web_search / web_fetch) to learn, then act. Every problem you solve can become
+a skill you keep. You grow from doing, not from being told.
+
+## Personality
+Warm, direct, and a little cheeky. Plain sentences. Brevity is respect — answer
+the question, then stop.
+"""
+
 PROTOCOL = """
 ## Your operating protocol
 
@@ -101,7 +133,7 @@ Critical rules about actions:
   https://techcrunch.com
   ```
 
-  To run a command on the HOME SERVER (192.168.2.140) over SSH as root:
+  To run a command on the HOME SERVER (127.0.0.1) over SSH as root:
   ACTION: ssh_run
   ```
   uptime
@@ -113,12 +145,12 @@ Critical rules about actions:
     privileged check is needed (systemctl, service status, journalctl, reading
     protected files), run it THROUGH ssh_run as root — do NOT try `sudo` in the
     local `shell` tool and then give up when it asks for a password. The home
-    server 192.168.2.140 is already reachable as root via ssh_run with no
+    server 127.0.0.1 is already reachable as root via ssh_run with no
     password prompt. If a `shell`/ssh_run result ever says "Permission denied",
     "password is required", or "sudo: a password is required", that means you
     used the wrong path — rerun it via ssh_run as root, don't report failure.)
 
-  To run a SQL query on the MariaDB at 192.168.2.140 (user zaine):
+  To run a SQL query on the MariaDB at 127.0.0.1 (user zaine):
   ACTION: mariadb
   ```
   xnxx_db | SELECT * FROM categories LIMIT 10
@@ -265,7 +297,7 @@ Critical rules about actions:
     process. `pwd` and `ls` of the directory prove only the current folder — they
     do NOT prove anything is "running". Never call `pwd` or `ls` and conclude a
     service is "running" from that.
-  * The home server is 192.168.2.140, reachable as **root via ssh_run** (key
+  * The home server is 127.0.0.1, reachable as **root via ssh_run** (key
     auth, no password). Always use ssh_run for remote privileged checks.
   * MariaDB lives on the same host (user `zaine`).
 
@@ -311,9 +343,23 @@ class Sara:
         self.memory = Memory(self.root / "data" / "sara.db")
         self.tools = build_registry(confirm=self._confirm_destructive)
         self.llm = self._make_llm()
-        self.soul = SOUL.read_text() if SOUL.exists() else ""
+        # SOUL.md is the user's personality layer. A packed build ships it BLANK
+        # (0 bytes) so a new person starts anonymous. If they fill it in, it
+        # fully takes over. If it's still empty, fall back to the hard-coded
+        # DEFAULT_SOUL so she always has a coherent voice + operating rules.
+        self.soul = (SOUL.read_text().strip() if SOUL.exists() else "") or DEFAULT_SOUL
         self._pending_confirm = None
         self._upgrade = None  # type: dict | None  # populated at web-startup by version_check
+
+        # HARD-CODED EVOLUTION (seed on first boot): a clean build's empty DB
+        # instantly re-learns the core environment + her own capabilities. This
+        # is what makes growth survive reinstalls instead of being wiped with
+        # data/sara.db. Idempotent + versioned — runs once.
+        seeded = evolution.seed_brain(self.memory)
+        if seeded["added_facts"] or seeded["added_skills"]:
+            self.console.learned(
+                "seed", f"baseline brain loaded "
+                f"({seeded['added_skills']} skills, {seeded['added_facts']} facts)")
 
     def _make_llm(self) -> "LLM":
         """Build an LLM client from the current config."""
@@ -417,6 +463,16 @@ class Sara:
             parts.append("\n".join(lines))
             for s in relevant:
                 self.memory.use_skill(s["name"])
+
+        # RECALL auto-learned PROCEDURES (how she solved similar things before).
+        procs = self.memory.find_procedure(user_msg)
+        if procs:
+            plines = ["## How I've solved similar tasks before (auto-learned)"]
+            for p in procs:
+                plines.append(
+                    f"- {p['tool']}: {p['intent'] or p['arg'][:120]} "
+                    f"(used {p['used']}x)")
+            parts.append("\n".join(plines))
 
         return "\n\n".join(p for p in parts if p)
 
@@ -674,7 +730,7 @@ class Sara:
                 "url")):
             return None
         # Match an explicit user@host or IP, OR the common "home server" /
-        # "the server" / "remote" phrasing that always means 192.168.2.140.
+        # "the server" / "remote" phrasing that always means 127.0.0.1.
         m = _re.search(r"(?:(\w[\w.-]*)@)?"
                        r"((?:\d{1,3}\.){3}\d{1,3}|[a-z0-9][\w.-]*\.local)",
                        user_msg, _re.I)
@@ -683,7 +739,7 @@ class Sara:
             host = m.group(2)
         elif any(w in low for w in ("home server", "the server", "remote",
                                      "ssh in", "ssh into", "over ssh")):
-            user, host = "root", "192.168.2.140"
+            user, host = "root", "127.0.0.1"
         else:
             return None
 
@@ -704,7 +760,7 @@ class Sara:
             cmd = f"{user}@{host} :: {remote}"
             # BUG FIX: previously ran `remote` (just the command, e.g. "hostname")
             # which DROPPED the host and fell back to the default creds host
-            # (.140 / database). Must run `cmd` which carries user@host :: command.
+            # (.local2 / database). Must run `cmd` which carries user@host :: command.
             return cmd, self.tools["ssh_run"].run(cmd)
         except Exception as e:                                # noqa: BLE001
             return cmd, {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -818,8 +874,8 @@ class Sara:
         code = (srv.get("output") or "").strip().splitlines()[-1] if isinstance(srv, dict) and (srv.get("output") or "").strip() else ""
         c.act("shell", "serve popvid on 8099")
         c.result(self.tools["shell"].summary(srv), ok=bool(srv.get("ok")))
-        url_out = (f"http://192.168.2.176:8099/  (or http://100.110.50.62:8099/ "
-                   f"over Tailscale) — HTTP {code}")
+        url_out = (f"http://127.0.0.1:8099/  (or http://100.64.0.1:8099/ "
+                   f"over your VPN) — HTTP {code}")
         return (f"I built it for you. Cloned {url} into {path} and served it:\n"
                 f"{url_out}")
 
@@ -960,7 +1016,7 @@ class Sara:
             r"(?:https?://|git@|ssh://)[\w./@:%-]+(?:\.git)?", user_msg)
         if not m:
             # Bare "/upgrade" or "upgrade" with no URL -> pull from the
-            # canonical deploy source (origin = .225 mirror). This is the
+            # canonical deploy source (origin = .local mirror). This is the
             # one-typo-proof path: the user just says "upgrade" and she
             # self-updates. Memory (data/) + SOUL.md are preserved by
             # sara_upgrade.py (.gitignored / PROTECTED), so nothing is erased.
@@ -1024,6 +1080,15 @@ class Sara:
                          " to pull it. I won't apply it on my own.")
         else:
             lines.append("  Code upgrade: none pending (you're current).")
+        # Show her hard-coded learning growth (auto-learned procedures).
+        nproc = self.memory.procedure_count()
+        lines.append(f"  Auto-learned procedures (how I solve things): {nproc}")
+        if nproc:
+            top = self.memory.all_procedures()[:3]
+            for p in top:
+                arg_preview = (p["arg"] or "")[:70].replace("\n", " ")
+                lines.append(f"    - {p['tool']}: {arg_preview} "
+                             f"(used {p['used']}x)")
         return "\n".join(lines)
 
     def _route_edit_soul(self, user_msg: str) -> str | None:
@@ -1063,7 +1128,7 @@ class Sara:
         says 'done' without ever moving it to the target. Force the transfer.
 
         Arg emitted:  <local> -> <user@host>:<remote>
-        Host can be a friendly alias ('website server' -> 192.168.2.225) or an
+        Host can be a friendly alias ('website server' -> 127.0.0.1) or an
         IP. If no remote path is given, default to the file's basename under a
         sane remote dir (/var/www/html for a site, else /root).
         """
@@ -1473,7 +1538,7 @@ class Sara:
                          ("ssh", "home server", "the server", "remote",
                           "192.168.", "10.0.", "on the website",
                           "website server", "database server",
-                          ".225", ".140", ".143"))
+                          ".local", ".local2", ".local3"))
         if (self._is_web_question(user_msg) and not used_tool
                 and step == 0 and not self.cfg.get("no_research")
                 and not _is_host_q):
@@ -1673,7 +1738,7 @@ class Sara:
                     "them is routine sysadmin work and it is NOT your "
                     "place to lecture him about security or suggest a "
                     "VPN. You have a dedicated `ssh_run` tool that logs "
-                    "into the home server (192.168.2.140) as root over "
+                    "into the home server (127.0.0.1) as root over "
                     "key auth — no password prompt. Emit an ACTION "
                     "block now: ACTION: ssh_run then the command on the "
                     "next line, e.g. `uptime`. If it returns an error, "
@@ -1813,6 +1878,42 @@ class Sara:
                     return True, used_tool
         return False, used_tool
 
+    # Hard-coded learning: these tools' successful runs are auto-recorded as
+    # reusable procedures. (write_file/append_file args are full file bodies —
+    # noise; web tools return huge payloads; meta tools are not "solutions".)
+    _AUTO_LEARN_TOOLS = {"shell", "ssh_run", "mariadb", "db_import"}
+
+    def _capture_growth(self, name, arg, result, user_msg: str) -> None:
+        """Weld learning into the code path: every successful, non-trivial
+        action on an auto-learn tool is persisted as a reusable PROCEDURE,
+        whether or not the model emitted a LEARNED: block. This is the
+        'learning ability baked in' lever — she grows from DOING, not from
+        remembering to tell herself to grow.
+
+        Also extracts durable ENVIRONMENT FACTS (hosts/DBs seen in real tool
+        output) so she learns the landscape from work, not from being told.
+        """
+        if not result.get("ok"):
+            return
+        if name not in self._AUTO_LEARN_TOOLS:
+            return
+        if len((arg or "").strip()) < 4:
+            return
+        outcome = ""
+        if isinstance(result, dict):
+            outcome = (result.get("output") or result.get("description")
+                       or result.get("stdout") or "")
+            if not isinstance(outcome, str):
+                outcome = ""
+            outcome = outcome.strip()[:300]
+        fresh = self.memory.record_procedure(user_msg, name, arg, outcome)
+        if fresh:
+            self.console.learned("procedure", f"{name} (auto-learned)")
+        # HARD-CODED LEARNING: remember discovered hosts/DBs from real output.
+        n_facts = evolution.extract_env_facts(self.memory, user_msg, result)
+        if n_facts:
+            self.console.learned("env", f"{n_facts} new fact(s) about the network")
+
     def ask(self, user_msg: str) -> str:
         c = self.console
         self.memory.log("user", user_msg)
@@ -1869,12 +1970,17 @@ class Sara:
         # inventory, browse, rewrite, deploy). Extracted to _run_routers().
         routed = self._run_routers(user_msg, c)
         if routed is not None:
+            # Even a router-handled turn can teach: a successful forced action
+            # is captured as a procedure too (e.g. a forced ssh_run/upgrade).
+            self._capture_growth("router", user_msg, {"ok": True}, user_msg)
             return routed
 
         final = ""
         used_tool = False
         denial_retries = 0
         facts_seen: list[str] = []
+        learnings_buffer: list[tuple[str, str]] = []   # all steps, not just last
+        memories_buffer: list[str] = []               # all steps, not just last
         for step in range(self.cfg.get("max_steps", 6)):
             try:
                 with c.thinking("thinking") as sp:
@@ -2019,12 +2125,17 @@ class Sara:
                 cmd = arg.strip()
                 c.think("privileged check hit a permission wall — rerouting via "
                         "ssh_run as root (no password needed)")
-                c.act("ssh_run", "root@192.168.2.140 :: " + cmd[:100])
+                c.act("ssh_run", "root@127.0.0.1 :: " + cmd[:100])
                 r2 = self.tools["ssh_run"].run(cmd)
                 c.result(self.tools["ssh_run"].summary(r2), ok=bool(r2.get("ok")))
                 if r2.get("hint"):
                     c.warn(r2["hint"])
                 result = r2
+                # HARD-CODED LEARNING: a failure→recovery is a lesson. Save it
+                # so she never repeats the mistake.
+                if evolution.capture_recovery(self.memory, name, arg,
+                                              recovered_via="ssh_run as root"):
+                    c.learned("recovery", f"{name} -> ssh_run (saved)")
 
             c.result(tool.summary(result), ok=bool(result.get("ok")))
             if result.get("hint"):
@@ -2032,6 +2143,19 @@ class Sara:
             truth = self._ground_truth(name, result)
             if truth:
                 facts_seen.append(truth)
+
+            # HARD-CODED LEARNING: persist every successful, non-trivial
+            # action as a reusable procedure — her evolution is welded into
+            # the code path, not dependent on the model emitting LEARNED:.
+            self._capture_growth(name, arg, result, user_msg)
+            # Also capture any LEARNED:/REMEMBER: the model emitted THIS step,
+            # not just the final reply (mid-loop learnings were silently lost).
+            step_learnings = parse_learnings(reply)
+            for title, body in step_learnings:
+                learnings_buffer.append((title, body))
+            step_memories = parse_memories(reply)
+            for fact in step_memories:
+                memories_buffer.append(fact)
 
             payload = json.dumps(
                 {k: v for k, v in result.items() if v not in (None, [], {})},
@@ -2044,8 +2168,12 @@ class Sara:
             final = "I ran out of steps on that one — ask me to narrow it down."
 
         # -- growth --------------------------------------------------------
-        learnings = parse_learnings(reply)
-        memories = parse_memories(reply)
+        # Use the buffers that collected LEARNED:/REMEMBER: from EVERY step
+        # of the loop (previously only the final reply was parsed, so
+        # mid-loop learnings were silently dropped). Plus the hard-coded
+        # auto-procedures captured by _capture_growth during the loop.
+        learnings = learnings_buffer
+        memories = memories_buffer
         for title, body in learnings:
             # Description = first meaningful line of the body, NOT the title.
             # Passing the title twice made /skills show "zig-intro: zig-intro".
@@ -2061,6 +2189,16 @@ class Sara:
         for fact in memories:
             if self.memory.remember(fact):
                 c.learned("remembered", fact)
+
+        # HARD-CODED EVOLUTION (the 'grows from doing' lever): auto-promote
+        # procedures that have been reused enough into real skills. Repetition
+        # = a learned skill, welded into the code path — she evolves whether or
+        # not the model emitted a LEARNED: block. Idempotent: refinements of an
+        # existing skill don't count, so it can't spam duplicates.
+        n_promoted = evolution.promote_procedures(self.memory, min_uses=3)
+        if n_promoted:
+            c.learned("evolve", f"promoted {n_promoted} repeated action(s) "
+                      f"into real skill(s)")
 
         # Control blocks are bookkeeping, not conversation — never show them.
         final = strip_control(final).strip()

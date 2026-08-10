@@ -17,7 +17,9 @@ Failures go in as role='system'.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -44,6 +46,17 @@ CREATE TABLE IF NOT EXISTS skills (
     uses        INTEGER DEFAULT 0,
     created     REAL NOT NULL,
     last_used   REAL
+);
+CREATE TABLE IF NOT EXISTS procedures (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    signature TEXT NOT NULL UNIQUE,
+    intent    TEXT,
+    tool      TEXT NOT NULL,
+    arg       TEXT,
+    outcome   TEXT,
+    used      INTEGER DEFAULT 0,
+    created   REAL NOT NULL,
+    last_used REAL
 );
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(ts);
 """
@@ -222,9 +235,82 @@ class Memory:
     def skill_count(self) -> int:
         return self.db.execute("SELECT COUNT(*) c FROM skills").fetchone()["c"]
 
+    # -- procedures (HARD-CODED learning: HOW she solved things) ----------
+    def record_procedure(self, intent: str, tool: str, arg: str,
+                         outcome: str = "") -> bool:
+        """Persist a successful action so S.A.R.A remembers HOW she solved a
+        task and can reuse it next session. Deduped by a signature of
+        (tool + normalised arg) — the same logical call across sessions
+        collides, so repetition just bumps a use-counter (she gets *better*
+        at a known procedure instead of spawning duplicates). Returns True
+        if this is a brand-new procedure (genuine growth), False if already
+        known.
+        """
+        tool = (tool or "").strip().lower()
+        if not tool:
+            return False
+        norm = re.sub(r"\s+", " ", (arg or "").strip())
+        if not norm:
+            return False
+        sig = f"{tool}::{norm[:300]}"
+        signature = hashlib.sha1(sig.encode()).hexdigest()[:16]
+        outcome = (outcome or "").strip()[:400]
+        intent = (intent or "").strip()[:300]
+        now = time.time()
+        try:
+            self.db.execute(
+                "INSERT INTO procedures "
+                "(signature, intent, tool, arg, outcome, created) "
+                "VALUES (?,?,?,?,?,?)",
+                (signature, intent, tool, norm[:400], outcome, now))
+            self.db.commit()
+            return True
+        except sqlite3.IntegrityError:
+            # Already known — she's refining a skill she already has.
+            self.db.execute(
+                "UPDATE procedures SET used = used + 1, last_used = ? "
+                "WHERE signature = ?", (now, signature))
+            self.db.commit()
+            return False
+
+    def find_procedure(self, query: str, limit: int = 3) -> list[dict]:
+        """Keyword recall of a past procedure, mirroring find_skills."""
+        words = {w.strip(".,!?;:'\"") for w in query.lower().split()
+                 if len(w) > 2}
+        words -= self.STOP
+        if not words:
+            return []
+        rows = self.db.execute("SELECT * FROM procedures").fetchall()
+        scored = []
+        for r in rows:
+            hay = (f"{r['intent']} {r['tool']} {r['arg'][:200]} "
+                   f"{r['outcome']}").lower()
+            hits = {w for w in words if w in hay}
+            if not hits:
+                continue
+            scored.append((len(hits), dict(r)))
+        scored.sort(key=lambda x: (-x[0], -x[1]["used"]))
+        return [s[1] for s in scored[:limit]]
+
+    def use_procedure(self, signature: str) -> None:
+        self.db.execute(
+            "UPDATE procedures SET used = used + 1, last_used = ? "
+            "WHERE signature = ?", (time.time(), signature))
+        self.db.commit()
+
+    def all_procedures(self) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM procedures ORDER BY used DESC, created DESC"
+            ).fetchall()]
+
+    def procedure_count(self) -> int:
+        return self.db.execute("SELECT COUNT(*) c FROM procedures"
+                               ).fetchone()["c"]
+
     def stats(self) -> dict:
         return {
             "turns": self.turn_count(),
             "facts": self.fact_count(),
             "skills": self.skill_count(),
+            "procedures": self.procedure_count(),
         }

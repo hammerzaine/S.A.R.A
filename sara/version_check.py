@@ -12,7 +12,7 @@ Remote source of truth:
   ``github.token`` - it is NEVER hard-coded in this file, so it can't leak into
   the install bundle / git history.
   Fallback: ``git ls-remote`` over the existing deploy key / SSH remotes
-  (``origin`` = the .225 mirror, ``github`` = git@github.com) - no token needed,
+  (``origin`` = the .local mirror, ``github`` = git@github.com) - no token needed,
   works for boxes that already have key auth.
 
 Design rules:
@@ -101,7 +101,7 @@ def check_for_upgrade(local_commit: str | None = None) -> dict:
 
     Tries, in order:
       1. GitHub REST API with the configured PAT (canonical private repo).
-      2. ``git ls-remote origin`` (the .225 deploy mirror, key-auth).
+      2. ``git ls-remote origin`` (the .local deploy mirror, key-auth).
       3. ``git ls-remote github`` (git@github.com, key-auth).
 
     Returns a dict:

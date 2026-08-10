@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover - readline is stdlib on Linux
 from sara.agent import Sara
 from sara.console import Console
 from sara.version_check import start_version_watch
+from sara import evolution as sara_evolution
 
 HISTFILE = Path.home() / ".sara_history"
 
@@ -154,6 +155,15 @@ def main() -> int:
             continue
         if low == "/skills":
             console.skill_table(sara.memory.all_skills())
+            continue
+        if low == "/evolve":
+            # Hard-coded evolution on demand: re-seed the baseline brain (in case
+            # it was wiped) and auto-promote repeated actions to real skills.
+            seeded = sara_evolution.seed_brain(sara.memory)
+            promoted = sara_evolution.promote_procedures(sara.memory, min_uses=2)
+            console.info(f"evolved — reseeded {seeded['added_skills']} skills / "
+                         f"{seeded['added_facts']} facts; promoted {promoted} "
+                         f"repeated action(s) to skill(s)")
             continue
         if low == "/memory":
             console.fact_list(sara.memory.facts(60))

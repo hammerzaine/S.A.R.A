@@ -1134,7 +1134,7 @@ class WebBrowse(Tool):
 
 # --------------------------------------------------------------------------
 class MariaDB(Tool):
-    """Run SQL against the home MariaDB (192.168.2.140, user zaine).
+    """Run SQL against the home MariaDB (127.0.0.1, user zaine).
 
     Arg form:
       <database> | <SQL>          run SQL in <database>
@@ -1143,7 +1143,7 @@ class MariaDB(Tool):
     zaine and zaine owns the schema, so this is her box, her data.
     """
     name = "mariadb"
-    description = ("Run a SQL query on the MariaDB at 192.168.2.140 as user zaine. "
+    description = ("Run a SQL query on the MariaDB at 127.0.0.1 as user zaine. "
                    "Use to read or write the database (e.g. list tables, insert "
                    "rows, count records).")
     usage = ("mariadb <database> | <SQL>     e.g. mariadb xnxx_db | SELECT * FROM "
@@ -1235,26 +1235,26 @@ class SSHRun(Tool):
     lands on the right box and not the database host (see HOST_ALIASES).
     """
 
-    # Friendly names -> actual hosts. "website"/"website server" is .225,
-    # "database"/"home server" is .140. Prevents landing on the wrong box.
+    # Friendly names -> actual hosts. "website"/"website server" is .local,
+    # "database"/"home server" is .local2. Prevents landing on the wrong box.
     HOST_ALIASES = {
-        "website": "192.168.2.225", "website-server": "192.168.2.225",
-        "website server": "192.168.2.225", "web": "192.168.2.225",
-        "225": "192.168.2.225", ".225": "192.168.2.225",
-        "database": "192.168.2.140", "db": "192.168.2.140",
-        "home-server": "192.168.2.140", "home server": "192.168.2.140",
-        "home": "192.168.2.140", "140": "192.168.2.140", ".140": "192.168.2.140",
+        "website": "127.0.0.1", "website-server": "127.0.0.1",
+        "website server": "127.0.0.1", "web": "127.0.0.1",
+        "225": "127.0.0.1", ".local": "127.0.0.1",
+        "database": "127.0.0.1", "db": "127.0.0.1",
+        "home-server": "127.0.0.1", "home server": "127.0.0.1",
+        "home": "127.0.0.1", "140": "127.0.0.1", ".local2": "127.0.0.1",
     }
 
     name = "ssh_run"
     description = ("Run a shell command on a remote server as root over SSH "
                    "(key auth, no password prompt). Use for remote sysadmin: "
                    "check a service, read a remote file, restart something. "
-                   "Accepts friendly host names: 'website server' = 192.168.2.225, "
-                   "'database'/'home server' = 192.168.2.140.")
+                   "Accepts friendly host names: 'website server' = 127.0.0.1, "
+                   "'database'/'home server' = 127.0.0.1.")
     usage = ("ssh_run <command>                       e.g. ssh_run uptime\n"
              "    ssh_run website server :: ls /var/www/html\n"
-             "    ssh_run root@192.168.2.140 :: df -h")
+             "    ssh_run root@127.0.0.1 :: df -h")
 
     @staticmethod
     def _resolve_host(host: str | None) -> str | None:
@@ -1301,15 +1301,15 @@ class SSHRun(Tool):
         only ever writes to her own local disk and then *claims* it's deployed.
 
         Arg form:  send_file <local> -> <user@host>:<remote>
-          e.g. send_file /home/zaine/site.html -> root@192.168.2.225:/var/www/html/index.html
-        Friendly host aliases (website server -> .225) are resolved.
+          e.g. send_file /home/zaine/site.html -> root@127.0.0.1:/var/www/html/index.html
+        Friendly host aliases (website server -> .local) are resolved.
         """
         arg = (arg or "").strip()
         m = re.match(r"^(.+?)\s*(?:->|to)\s*([\w.-]+@)?([\w.\- ]+?):(.+)$", arg)
         if not m:
             return {"ok": False, "error":
                     "usage: send_file <local> -> <user@host>:<remote> "
-                    "(e.g. /tmp/x.html -> root@192.168.2.225:/var/www/html/index.html)"}
+                    "(e.g. /tmp/x.html -> root@127.0.0.1:/var/www/html/index.html)"}
         local = m.group(1).strip().strip("`\"'")
         user = m.group(2).rstrip("@") if m.group(2) else self._cfg.get("user")
         host = self._resolve_host(m.group(3).strip())
@@ -1356,18 +1356,18 @@ class SSHRun(Tool):
         # Target forms (user@ optional; friendly aliases supported):
         #   "user@host :: command"   explicit host/user
         #   "host :: command"        host only (default user from creds)
-        #   "alias :: command"       friendly name (website server -> .225)
+        #   "alias :: command"       friendly name (website server -> .local)
         #   "command"                default host from creds
         # Target forms (user@ optional; friendly aliases supported):
         #   "user@host :: command"   explicit host/user, '::' separator
         #   "user@host: command"     single ':' (the model emits this a lot)
         #   "user@host command"       bare whitespace separator
         #   "host :: command"        host only (default user from creds)
-        #   "alias :: command"       friendly name (website server -> .225)
+        #   "alias :: command"       friendly name (website server -> .local)
         #   "command"                default host from creds
         # The old parser ONLY accepted '::', so any other form silently fell
         # through to the DEFAULT creds host and IGNORED the explicit target
-        # (e.g. "root@192.168.2.225 hostname" connected to .140). That is a
+        # (e.g. "root@127.0.0.1 hostname" connected to the wrong box). That is a
         # silent wrong-host bug — fixed by accepting : / :: / whitespace.
         m = re.match(
             r"^(?:([\w.-]+)@)?([\w.\- ]+?)\s*(?:::?|\s+)\s*(.+)$", arg, re.S)
@@ -1384,7 +1384,7 @@ class SSHRun(Tool):
                 user, host, command = tm.group(1), tm.group(2), tm.group(3).strip()
             else:
                 command = arg
-        # Resolve friendly host names to real IPs (website server -> .225 etc.)
+        # Resolve friendly host names to real IPs (website server -> .local etc.)
         host = self._resolve_host(host)
         key = os.path.expanduser(self._cfg.get("key_path", "~/.ssh/sara_agent_key"))
 
@@ -1430,7 +1430,7 @@ class SendFile(Tool):
     """Transfer a LOCAL file to a REMOTE host (SFTP). See SSHRun.send_file.
 
     This is its own tool so the model can emit `ACTION: send_file` directly
-    when the user says 'put this on the website server' / 'copy it to 192.168.2.225'.
+    when the user says 'put this on the website server' / 'copy it to 127.0.0.1'.
     Without it she only ever wrote to her own disk and *claimed* it was deployed.
     """
     name = "send_file"
@@ -1440,7 +1440,7 @@ class SendFile(Tool):
                    "Arg: <local-path> -> <user@host>:<remote-path>.")
     usage = ("send_file <local> -> <user@host>:<remote>\n"
              "  e.g. send_file /home/zaine/site.html "
-             "-> root@192.168.2.225:/var/www/html/index.html")
+             "-> root@127.0.0.1:/var/www/html/index.html")
 
     def __init__(self):
         self._ssh = SSHRun()
@@ -1459,7 +1459,7 @@ class WinRun(Tool):
 
     Windows 10/11 ship a built-in OpenSSH server; paramiko talks to it the
     same as Linux. Default host is the GUESSED Windows box on the LAN
-    (192.168.2.100, same /24 as the home server) — set the real host in
+    (127.0.0.1, same /24 as the home server) — set the real host in
     credentials.json under "win_ssh" to repoint. For PowerShell, pass the
     command via `powershell -NoProfile -Command "..."`.
 
@@ -1472,16 +1472,16 @@ class WinRun(Tool):
                    "key auth). Use for Windows sysadmin: ipconfig, Get-Process, "
                    "dir, services, powershell one-liners. Same SSH as Linux. "
                    "Accepts friendly host names: 'windows'/'win'/'143' -> "
-                   "192.168.2.143.")
+                   "127.0.0.1.")
     usage = ("win_run <command>                    e.g. win_run ipconfig\n"
              "    win_run powershell -NoProfile -Command \"Get-Process\"\n"
-             "    win_run admin@192.168.2.143 :: systeminfo")
+             "    win_run admin@127.0.0.1 :: systeminfo")
 
-    # Friendly names -> actual Windows hosts. The real Windows box is .143.
+    # Friendly names -> actual Windows hosts. The real Windows box is .local3.
     HOST_ALIASES = {
-        "windows": "192.168.2.143", "win": "192.168.2.143",
-        "143": "192.168.2.143", ".143": "192.168.2.143",
-        "100": "192.168.2.100", ".100": "192.168.2.100",
+        "windows": "127.0.0.1", "win": "127.0.0.1",
+        "143": "127.0.0.1", ".local3": "127.0.0.1",
+        "100": "127.0.0.1", ".local4": "127.0.0.1",
     }
 
     @staticmethod
@@ -1507,8 +1507,8 @@ class WinRun(Tool):
         arg = (arg or "").strip().strip("`\"'")
         if not arg:
             return {"ok": False, "error": "no command given"}
-        # guessed default Windows host (the real Windows box is .143)
-        host = self._resolve_host(self._cfg.get("host") or "192.168.2.143")
+        # guessed default Windows host (the real Windows box is .local3)
+        host = self._resolve_host(self._cfg.get("host") or "127.0.0.1")
         user = self._cfg.get("user") or "administrator"
         # optional explicit target: "user@host :: command"
         m = re.match(r"^([\w.-]+)@([\w.-]+)\s*::\s*(.+)$", arg, re.S)
@@ -2038,7 +2038,7 @@ class ServerInventory(Tool):
     Arg forms (same friendly-host resolution as SSHRun):
       <alias>                       e.g. server_inventory website server
       <user>@<host> :: <command>   NOT used — arg is just the host
-      <host>                       e.g. server_inventory 192.168.2.225
+      <host>                       e.g. server_inventory 127.0.0.1
     Credentials come from ~/.config/systemd or the ssh block of credentials.json
     (sara_agent_key), falling back to SSHRun's creds.
     """
@@ -2053,11 +2053,11 @@ class ServerInventory(Tool):
         "the web box', etc. Returns a structured report: web server, ports, "
         "Apache vhosts + Alias/ProxyPass, nginx sites, docroots, standalone "
         "python services, and any broken paths. Accepts friendly host names: "
-        "'website server' = 192.168.2.225, 'database'/'home server' = 192.168.2.140.")
+        "'website server' = 127.0.0.1, 'database'/'home server' = 127.0.0.1.")
     usage = (
         "server_inventory <host>                       e.g. server_inventory website server\n"
-        "    server_inventory 192.168.2.225\n"
-        "    server_inventory root@192.168.2.140")
+        "    server_inventory 127.0.0.1\n"
+        "    server_inventory root@127.0.0.1")
 
     PROBE = r'''
 probe(){ echo "PROBE:$(curl -s -o /dev/null -m 6 -w '%{http_code}' -H "Host: ${HOSTNAME:-127.0.0.1}" "http://127.0.0.1$1" 2>/dev/null) ${1}"; }
@@ -2088,7 +2088,7 @@ echo "=== PROBE PATHS ==="; export HOSTNAME; for p in / /work/ /books/ /mtg/ /mt
         arg = (arg or "").strip().strip("`\"'")
         if not arg:
             return {"ok": False, "error": "need a host — e.g. server_inventory website server"}
-        # Forms: "website server" / "192.168.2.225" / "user@host"
+        # Forms: "website server" / "127.0.0.1" / "user@host"
         user = self._cfg.get("user")
         host = arg
         m = re.match(r"^([\w.-]+)@(.+)$", arg)

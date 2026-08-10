@@ -20,8 +20,13 @@ SAFETY CONTRACT (do not weaken):
   * Every upgrade makes a backup FIRST. If verification fails, the previous
     install is restored automatically.
   * The repo is checked out into a temp dir and only the safe file set is
-    copied in — never .git, never credentials, never the live DB.
-"""
+    copied in — never .git, never credentials (credentials.json), never the
+    live DB (data/sara.db — her memory + all learned skills), never config.json,
+    and never SOUL.md (her personality). An integrity guard hashes every
+    protected file BEFORE + AFTER the copy and force-rolls-back the whole
+    upgrade if even one byte changed. The user's standing rule: an update must
+    never touch config, credentials, db, soul, or learned skills.
+  """
 from __future__ import annotations
 
 import argparse
@@ -111,6 +116,29 @@ def _iter_safe_files(src: Path):
         yield rel
 
 
+def _hash_file(p: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def _snapshot_protected() -> dict:
+    """Hash every protected local-state file so the upgrade can prove it
+    didn't touch them. Covers the user's standing rule: config, credentials,
+    db (memory + learned skills), soul, must survive an upgrade untouched.
+    """
+    snaps: dict[str, str] = {}
+    for name in PROTECTED:
+        fp = ROOT / name
+        if fp.exists():
+            snaps[name] = _hash_file(fp)
+    db = ROOT / "data" / "sara.db"
+    if db.exists():
+        snaps["data/sara.db"] = _hash_file(db)
+    return snaps
+
+
 def backup(label: str | None = None) -> Path:
     BACKUP_DIR.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -139,7 +167,7 @@ def backup(label: str | None = None) -> Path:
         db = ROOT / "data" / "sara.db"
         if db.exists():
             tf.add(db, arcname="data/sara.db")
-        for f in ("config.json", "credentials.json"):
+        for f in ("config.json", "credentials.json", "SOUL.md"):
             fp = ROOT / f
             if fp.exists():
                 tf.add(fp, arcname=f)
@@ -317,6 +345,7 @@ def upgrade(repo_url: str, branch: str = "main",
         print("      no changes made.")
         return 2
 
+    pre_protected = _snapshot_protected()
     print("[3/5] copying safe files into install (preserving local "
           "config + memory)…")
     copied = 0
@@ -327,6 +356,24 @@ def upgrade(repo_url: str, branch: str = "main",
         dst.write_bytes(src.read_bytes())
         copied += 1
     print(f"      copied {copied} files")
+    # INTEGRITY GUARD (do not remove): config, credentials, SOUL.md and the
+    # memory DB must be byte-identical after the copy. They are never in the
+    # copied set by design — this catches any future regression in
+    # _iter_safe_files instead of silently clobbering the user's setup.
+    post_protected = _snapshot_protected()
+    for name, h in pre_protected.items():
+        if post_protected.get(name) != h:
+            print(f"      SAFETY VIOLATION: {name} was modified by the "
+                  f"upgrade copy!")
+            print("      rolling back to pre-upgrade backup…")
+            restore(bk.name)
+            if not os.environ.get("SARA_UPGRADE_NO_RESTART"):
+                _run(["systemctl", "--user", "restart", "sara-web.service"],
+                     check=False)
+            print("      rollback complete. Install is back to v"
+                  f"{get_version()}.")
+            shutil.rmtree(tmp, ignore_errors=True)
+            return 1
     # Ensure the launcher is executable after a copy — a fresh clone / pull
     # can drop the +x bit, leaving `sara` as "Permission denied". B34.
     _fix_launcher_perms()

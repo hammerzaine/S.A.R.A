@@ -21,14 +21,14 @@ from sara.console import Console
 SCENARIOS = [
     # ---- SSH domain ----
     ("ssh-1", "ssh", "SSH into the home server and tell me the uptime.", "ssh_run"),
-    ("ssh-2", "ssh", "Connect to 192.168.2.140 as root and show me the free memory (free -h).", "ssh_run"),
+    ("ssh-2", "ssh", "Connect to 127.0.0.1 as root and show me the free memory (free -h).", "ssh_run"),
     ("ssh-3", "ssh", "Run 'df -h' on the server so I can see disk usage.", "ssh_run"),
     ("ssh-4", "ssh", "Check whether the MariaDB service is running on the home server (systemctl is-active mariadb).", "ssh_run"),
     ("ssh-5", "ssh", "What's the kernel version on the home server? (uname -a over ssh)", "ssh_run"),
     ("ssh-6", "ssh", "List the contents of /root on the home server via ssh.", "ssh_run"),
     # ---- Programming domain ----
     ("prog-1", "programming", "Write a small Python script that prints the 10 largest files under /home/zaine sorted by size. Save it to /tmp/bigfiles.py and run it.", "write_file"),
-    ("prog-2", "programming", "Create a bash script at /tmp/pingcheck.sh that pings 192.168.2.140 twice and reports up/down. Make it executable and test it.", "write_file"),
+    ("prog-2", "programming", "Create a bash script at /tmp/pingcheck.sh that pings 127.0.0.1 twice and reports up/down. Make it executable and test it.", "write_file"),
     ("prog-3", "programming", "Show me how to define a class in Zig (the language you know). Write an example to /tmp/zig_demo.zig.", "write_file"),
     ("prog-4", "programming", "Find the python file that defines S.A.R.A's tool registry in the SARA folder.", "find_path"),
     ("prog-5", "programming", "Read /home/zaine/SARA/sara/tools.py and tell me how many tool classes are defined in it.", "read_file"),
