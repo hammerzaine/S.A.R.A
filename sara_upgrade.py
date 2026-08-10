@@ -207,6 +207,15 @@ def _verify() -> tuple[bool, str]:
     if os.environ.get("SARA_UPGRADE_NO_RESTART"):
         print("      (restart skipped by caller)")
     else:
+        # If there's no sara-web.service unit on this box (e.g. SARA runs
+        # standalone without systemd), don't hard-fail the upgrade — the code
+        # deploy is the point; just note it and skip the live smoke check.
+        u = subprocess.run(["systemctl", "--user", "list-unit-files",
+                            "sara-web.service"], capture_output=True, text=True)
+        if "sara-web.service" not in u.stdout:
+            print("      (no sara-web.service unit here — skipping restart/"
+                  "smoke; start SARA manually)")
+            return True, "verified (code deployed; no systemd unit to restart)"
         try:
             _run(["systemctl", "--user", "restart", "sara-web.service"], check=True)
         except subprocess.CalledProcessError as e:
