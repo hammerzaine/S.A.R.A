@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -233,6 +235,10 @@ def ask(a: Ask):
     if not msg:
         return StreamingResponse(iter([]), media_type="text/event-stream")
 
+    # Slash command? Intercept locally so the small model never sees it.
+    if msg.startswith("/upgrade"):
+        return _stream_upgrade(msg)
+
     def run():
         with _lock:
             try:
@@ -242,6 +248,74 @@ def ask(a: Ask):
                 _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
             finally:
                 _sink.put({"type": "done"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            ev = _sink.get()
+            yield f"data: {json.dumps(ev)}\n\n"
+            if ev.get("type") == "done":
+                return
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+def _stream_upgrade(msg: str):
+    """Run /upgrade from the web chat, streaming progress as SSE events.
+
+    Bare ``/upgrade`` pulls origin/main. ``/upgrade <repo-url> [branch]``
+    pulls a specific source. ``/upgrade backup|list|rollback <name>`` run the
+    matching toolkit subcommand. The service is restarted here (the web
+    process survives because we set SARA_UPGRADE_NO_RESTART so the toolkit
+    doesn't restart it mid-upgrade), then the result is streamed.
+    """
+    rest = msg[len("/upgrade"):].strip()
+    if not rest or rest.lower() in ("status", "help"):
+        cargs = ["upgrade", "origin", "main"]
+    elif rest.split()[0] in ("backup", "list", "rollback", "status"):
+        cargs = rest.split()
+    else:
+        cargs = ["upgrade", *rest.split()]
+
+    def run():
+        try:
+            env = dict(os.environ)
+            env["SARA_UPGRADE_NO_RESTART"] = "1"
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "sara_upgrade.py"), *cargs],
+                capture_output=True, text=True, env=env, timeout=600,
+            )
+            out = (proc.stdout or proc.stderr).strip()
+            success = proc.returncode == 0
+            # The toolkit skipped the restart, so do it here (the web process
+            # survives its own restart — systemd --user re-launches it).
+            if success:
+                try:
+                    subprocess.run(
+                        ["systemctl", "--user", "restart", "sara-web.service"],
+                        check=False, timeout=30)
+                except Exception:  # noqa: BLE001
+                    pass
+            # Stream the toolkit output line-by-line as 'result' events.
+            for line in out.splitlines() or ["(no output)"]:
+                _sink.put({"type": "result", "text": line,
+                           "ok": success})
+            _sink.put({
+                "type": "answer",
+                "text": ("✅ Upgrade done — S.A.R.A restarted. " + out
+                         if success else
+                         "❌ Upgrade failed (rolled back). " + out),
+            })
+        except subprocess.TimeoutExpired:
+            _sink.put({"type": "error",
+                       "text": "upgrade timed out after 10m"})
+        except Exception as e:  # noqa: BLE001
+            _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            _sink.put({"type": "done"})
 
     threading.Thread(target=run, daemon=True).start()
 

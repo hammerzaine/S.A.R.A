@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -200,11 +201,16 @@ def _verify() -> tuple[bool, str]:
              check=True)
     except subprocess.CalledProcessError as e:
         return False, f"compile failed: {e.stderr[:300]}"
-    # 2) restart service
-    try:
-        _run(["systemctl", "--user", "restart", "sara-web.service"], check=True)
-    except subprocess.CalledProcessError as e:
-        return False, f"service restart failed: {e.stderr[:200]}"
+    # 2) restart service — unless the caller asked us NOT to (the web chat
+    #    path restarts sara-web.service itself after streaming the result,
+    #    so restarting from inside this process would kill the upgrade).
+    if os.environ.get("SARA_UPGRADE_NO_RESTART"):
+        print("      (restart skipped by caller)")
+    else:
+        try:
+            _run(["systemctl", "--user", "restart", "sara-web.service"], check=True)
+        except subprocess.CalledProcessError as e:
+            return False, f"service restart failed: {e.stderr[:200]}"
     # 3) wait for the service to actually come up (poll /api/status), THEN
     #    run a live smoke turn. A fresh boot can take >4s and the model's
     #    first inference (cold load / free-tier throttle) can exceed 120s, so
@@ -327,7 +333,9 @@ def upgrade(repo_url: str, branch: str = "main",
         print(f"      VERIFY FAILED: {msg}")
         print("      rolling back to pre-upgrade backup…")
         restore(bk.name)
-        _run(["systemctl", "--user", "restart", "sara-web.service"], check=False)
+        if not os.environ.get("SARA_UPGRADE_NO_RESTART"):
+            _run(["systemctl", "--user", "restart", "sara-web.service"],
+                 check=False)
         print("      rollback complete. Install is back to v"
               f"{get_version()}.")
         shutil.rmtree(tmp, ignore_errors=True)

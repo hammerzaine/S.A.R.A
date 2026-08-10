@@ -162,14 +162,23 @@ def main() -> int:
             continue
         if low.startswith("/upgrade"):
             import subprocess
-            cargs = line[len("/upgrade"):].strip() or "status"
-            r = subprocess.run([sys.executable, "sara_upgrade.py", *cargs.split()],
+            rest = line[len("/upgrade"):].strip()
+            if not rest or rest.lower() in ("status", "help"):
+                # bare "/upgrade" → pull origin/main, the default source
+                cargs = ["upgrade", "origin", "main"]
+            elif rest.split()[0] in ("backup", "list", "rollback", "status"):
+                # explicit subcommand: /upgrade backup | list | rollback <name>
+                cargs = rest.split()
+            else:
+                # /upgrade <repo-url> [branch]  (or a bare remote name)
+                cargs = ["upgrade", *rest.split()]
+            r = subprocess.run([sys.executable, "sara_upgrade.py", *cargs],
                                capture_output=True, text=True)
-            (console.info if r.returncode == 0 else console.warn)(
-                r.stdout.strip() or r.stderr.strip())
-            if low == "/upgrade":
-                console.info("usage: /upgrade <repo-url> [branch] | backup | "
-                             "list | rollback <name>")
+            out = (r.stdout.strip() or r.stderr.strip())
+            (console.info if r.returncode == 0 else console.warn)(out)
+            if r.returncode != 0:
+                console.info("usage: /upgrade [<repo-url> [branch]] | "
+                             "backup | list | rollback <name>")
             continue
         if low.startswith("/"):
             console.warn(f"no such command: {line.split()[0]} — /help")
