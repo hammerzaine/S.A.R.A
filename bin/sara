@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # S.A.R.A launcher — activates the venv and runs the unified entry point.
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve through symlinks (e.g. when invoked via ~/.local/bin/sara, a symlink
+# to this file) so HERE always points at the real install, not the symlink dir.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HERE="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 source "$HERE/.venv/bin/activate"
 exec python "$HERE/sara.py" "$@"
