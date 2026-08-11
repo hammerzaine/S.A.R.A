@@ -228,6 +228,10 @@ def ask(a: Ask):
     # Slash command? Intercept locally so the small model never sees it.
     if msg.startswith("/upgrade"):
         return _stream_upgrade(msg)
+    if msg.startswith("/factoryreset"):
+        return _stream_factoryreset(msg)
+    if msg.startswith("/model"):
+        return _stream_model(msg)
 
     def run():
         with _lock:
@@ -302,6 +306,121 @@ def _stream_upgrade(msg: str):
         except subprocess.TimeoutExpired:
             _sink.put({"type": "error",
                        "text": "upgrade timed out after 10m"})
+        except Exception as e:  # noqa: BLE001
+            _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            _sink.put({"type": "done"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            ev = _sink.get()
+            yield f"data: {json.dumps(ev)}\n\n"
+            if ev.get("type") == "done":
+                return
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+def _stream_factoryreset(msg: str):
+    """Run /factoryreset from the web chat, streaming progress as SSE events.
+
+    Bare ``/factoryreset`` shows the warning and asks for confirmation
+    (``/factoryreset --yes``). The wipe is destructive: it drops the memory
+    DB, blanks SOUL.md, and deletes config.json + credentials.json. Code and
+    upgrade_state.json are preserved. The web service is restarted afterwards
+    (with SARA_UPGRADE_NO_RESTART so we don't kill our own process mid-reset).
+    """
+    rest = msg[len("/factoryreset"):].strip().lower()
+    confirm = rest in ("--yes", "confirm", "-y", "yes")
+
+    def run():
+        if not confirm:
+            _sink.put({"type": "result",
+                       "text": "⚠ Factory reset wipes memory + SOUL.md + "
+                               "config/credentials.", "ok": False})
+            _sink.put({"type": "answer",
+                       "text": "To proceed, type:  /factoryreset --yes"})
+            return
+        try:
+            env = dict(os.environ)
+            env["SARA_UPGRADE_NO_RESTART"] = "1"
+            res = _sara.reset_state(confirm=True)
+            if res.get("ok"):
+                try:
+                    subprocess.run(
+                        ["systemctl", "--user", "restart",
+                         "sara-web.service"], check=False, timeout=30)
+                except Exception:  # noqa: BLE001
+                    pass
+                _sink.put({"type": "result",
+                           "text": "memory + SOUL.md + config/credentials wiped",
+                           "ok": True})
+                _sink.put({"type": "answer",
+                           "text": "✅ Factory reset complete — she's a blank "
+                                   "slate, and the web service restarted."})
+            else:
+                _sink.put({"type": "answer",
+                           "text": f"❌ Reset failed: {res.get('error', res)}"})
+        except Exception as e:  # noqa: BLE001
+            _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            _sink.put({"type": "done"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            ev = _sink.get()
+            yield f"data: {json.dumps(ev)}\n\n"
+            if ev.get("type") == "done":
+                return
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+def _stream_model(msg: str):
+    """Run /model from the web chat, streaming progress as SSE events.
+
+    /model                -> show current provider/model + preset list
+    /model <provider>     -> switch connection to that preset
+    /model <provider> <model> -> switch + set model
+    /model custom <url> [model] -> custom OpenAI-compatible endpoint
+    Optional trailing `key:VALUE` sets the api key. The change is live
+    (set_config rebuilds the LLM) and persisted to config.json.
+    """
+    arg = msg[len("/model"):].strip()
+
+    def run():
+        try:
+            res = _sara.cmd_model(arg)
+            if res.get("show"):
+                _sink.put({"type": "result",
+                           "text": f"provider {res['provider']} · "
+                                   f"{res['base_url']} · model {res['model']}",
+                           "ok": True})
+                _sink.put({"type": "result",
+                           "text": "presets: " + ", ".join(res["presets"]),
+                           "ok": True})
+                _sink.put({"type": "answer",
+                           "text": "Pick a connection above, or type e.g. "
+                                   "`/model ollama` or `/model custom "
+                                   "https://.../v1`. Add `key:YOURKEY` for "
+                                   "authenticated providers."})
+            elif res.get("ok"):
+                _sink.put({"type": "result", "text": res.get("msg", "done"),
+                           "ok": True})
+                _sink.put({"type": "answer",
+                           "text": "✅ connection switched — next turn uses "
+                                   "the new model."})
+            else:
+                _sink.put({"type": "answer",
+                           "text": "❌ " + res.get("error", "failed")})
         except Exception as e:  # noqa: BLE001
             _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
         finally:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re as _re
+import subprocess
 import time
 from pathlib import Path
 
@@ -407,6 +408,86 @@ class Sara:
             self.llm = self._make_llm()
         return {"ok": True, "msg": f"{key} -> {value!r}",
                 "config": self.get_config()["config"]}
+
+    def cmd_model(self, arg: str) -> dict:
+        """Handle the ``/model`` chat command: switch provider/model live.
+
+        Forms:
+          /model                      show current config + provider list
+          /model list                 list provider presets
+          /model <provider>           switch connection to that preset
+          /model <provider> <model>   switch + set the model
+          /model custom <url> [model] use a custom OpenAI-compatible base_url
+          ... key:<VALUE>             also set the api key (optional flag)
+
+        Returns a dict the CLI/web renderers turn into a message.
+        """
+        arg = (arg or "").strip()
+        presets = list(PROVIDERS)
+        if not arg or arg.lower() == "list":
+            cfg = self.cfg
+            return {"ok": True, "show": True,
+                    "provider": cfg.get("provider"),
+                    "base_url": cfg.get("base_url"),
+                    "model": cfg.get("model"),
+                    "api_key_set": bool(cfg.get("api_key")),
+                    "presets": presets}
+
+        toks = arg.split()
+        # custom endpoint
+        if toks[0].lower() == "custom":
+            if len(toks) < 2:
+                return {"ok": False, "error": "usage: /model custom <base_url> [model]"}
+            url = toks[1]
+            if not url.startswith("http"):
+                return {"ok": False,
+                        "error": "base_url must start with http(s)://"}
+            r = self.set_config("provider", "custom")
+            if not r.get("ok"):
+                return r
+            r = self.set_config("base_url", url)
+            if not r.get("ok"):
+                return r
+            rest = toks[2:]
+            api_key = _pop_key_flag(rest)
+            if rest:
+                self.set_config("model", " ".join(rest))
+            if api_key is not None:
+                self.set_config("api_key", api_key)
+            return {"ok": True, "msg": f"custom endpoint -> {url}"}
+
+        prov = toks[0]
+        if prov not in PROVIDERS:
+            return {"ok": False,
+                    "error": f"unknown provider '{prov}'. "
+                             f"known: {', '.join(presets)}"}
+        rest = toks[1:]
+        api_key = _pop_key_flag(rest)
+        model = " ".join(rest) if rest else None
+
+        # switch provider + adopt its preset endpoint (so "connect to ollama"
+        # actually points at the local url, even coming from a custom one)
+        r = self.set_config("provider", prov)
+        if not r.get("ok"):
+            return r
+        if prov != "custom":
+            r = self.set_config("base_url", PROVIDERS[prov])
+            if not r.get("ok"):
+                return r
+        if model:
+            r = self.set_config("model", model)
+            if not r.get("ok"):
+                return r
+        if api_key is not None:
+            r = self.set_config("api_key", api_key)
+            if not r.get("ok"):
+                return r
+        bits = [f"provider -> {prov}"]
+        if model:
+            bits.append(f"model -> {model}")
+        if api_key is not None:
+            bits.append("api_key set")
+        return {"ok": True, "msg": ", ".join(bits)}
 
     def get_config(self) -> dict:
         return {"ok": True, "config": dict(self.cfg),
@@ -2260,3 +2341,82 @@ class Sara:
         s["no_research"] = bool(self.cfg.get("no_research"))
         s["online"] = self.llm.available()
         return s
+
+    def _wipe_file(self, path: Path) -> bool:
+        """Delete ``path`` if it exists. Returns True if it was removed or was
+        already absent (clean target), False only on an OSError we can't recover
+        from. Used by the factory reset to erase config/credential files."""
+        try:
+            if path.exists():
+                path.unlink()
+            return True
+        except OSError:
+            return False
+
+    def reset_state(self, confirm: bool = False) -> dict:
+        """Factory reset: wipe learned memory + blank SOUL.md, return to a
+        fresh agent. Requires ``confirm=True`` — this is destructive.
+
+        What it drops:
+          * memory DB (turns / facts / skills / procedures)
+          * SOUL.md (personality) — blanked, agent falls back to DEFAULT_SOUL
+        What it PRESERVES (per the standing upgrade rule):
+          * code, upgrade_state.json
+        What it ALSO wipes (full factory reset):
+          * config.json  — deleted; agent falls back to DEFAULT_CONFIG on boot
+          * credentials.json  — deleted; all stored secrets (e.g. github PAT) gone
+        After wiping, if the sara-web systemd unit exists it is restarted so
+        the running service picks up the blank state. The restart is skipped
+        when the caller sets SARA_UPGRADE_NO_RESTART (e.g. the web path, which
+        owns its own restart) or no unit is present.
+        """
+        if not confirm:
+            return {"ok": False, "error": "confirmation required",
+                    "hint": "call reset_state(confirm=True) to wipe everything"}
+        # 1) wipe memory
+        mem = self.memory.reset()
+        # 2) blank SOUL.md (keep the file; agent falls back to DEFAULT_SOUL)
+        soul = self.root / "SOUL.md"
+        try:
+            soul.write_text("")
+            soul_blanked = True
+        except OSError:
+            soul_blanked = False
+        # 2b) wipe config.json + credentials.json — full factory reset.
+        #     Both are deleted; the agent falls back to DEFAULT_CONFIG and an
+        #     empty credential store on next boot (loaders tolerate missing files).
+        config_wiped = self._wipe_file(self.cfg_path)
+        creds_wiped = self._wipe_file(self.root / "credentials.json")
+        # 3) restart the web service if we're running under it
+        restarted = False
+        if not os.environ.get("SARA_UPGRADE_NO_RESTART"):
+            try:
+                u = subprocess.run(
+                    ["systemctl", "--user", "list-unit-files",
+                     "sara-web.service"], capture_output=True, text=True)
+                if "sara-web.service" in u.stdout:
+                    subprocess.run(
+                        ["systemctl", "--user", "restart", "sara-web.service"],
+                        check=False, timeout=30)
+                    restarted = True
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": True, "memory_before": mem["before"],
+                "memory_after": mem["after"],
+                "soul_blanked": soul_blanked,
+                "config_wiped": config_wiped,
+                "credentials_wiped": creds_wiped,
+                "restarted": restarted}
+
+
+def _pop_key_flag(tokens: list[str]) -> "str | None":
+    """Pull an optional ``key:VALUE`` flag out of a token list (mutates it).
+
+    Returns the key value, or None if no flag was present.
+    """
+    for i, t in enumerate(tokens):
+        if t.lower().startswith("key:"):
+            val = t.split(":", 1)[1]
+            del tokens[i]
+            return val
+    return None

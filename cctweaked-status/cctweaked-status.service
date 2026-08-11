@@ -1,0 +1,14 @@
+[Unit]
+Description=CCTweaked status backend (S.A.R.A)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/SARA/cctweaked-status
+ExecStart=%h/SARA/install-bundle/../.venv/bin/python3 %h/SARA/cctweaked-status/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

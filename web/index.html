@@ -128,6 +128,21 @@ main{flex:1; display:flex; min-height:0}
 .spin{color:var(--grey); font-style:italic}
 ::-webkit-scrollbar{width:9px}
 ::-webkit-scrollbar-thumb{background:var(--line); border-radius:9px}
+/* ---------- command palette ---------- */
+#palette{
+  position:absolute; left:20px; right:20px; bottom:78px;
+  background:var(--panel); border:1px solid var(--cyan-d); border-radius:11px;
+  box-shadow:0 12px 40px rgba(0,0,0,.55); padding:6px; max-height:300px;
+  overflow-y:auto; display:none; z-index:20;
+}
+#palette.show{display:block}
+.pitem{padding:8px 12px; border-radius:7px; display:flex; gap:12px; align-items:baseline;
+        cursor:pointer}
+.pitem .c{color:var(--cyan); font-weight:700; min-width:118px}
+.pitem .d{color:var(--grey); font-size:12px}
+.pitem.active{background:rgba(61,219,217,.12); border:1px solid var(--cyan-d)}
+.pitem.active .d{color:var(--white)}
+.phint{color:var(--grey-d); font-size:11px; padding:6px 12px 2px}
 @media(max-width:760px){#side{display:none}}
 </style>
 </head>
@@ -149,7 +164,8 @@ main{flex:1; display:flex; min-height:0}
 
 <div id="settings" class="hidden">
   <div class="setrow"><label>Provider</label>
-    <select id="setProvider"></select></div>
+    <select id="setProvider"></select>
+    <button id="switchConn" title="Switch live connection via /model">Switch</button></div>
   <div class="setrow"><label>Base URL</label>
     <input id="setUrl" placeholder="http://127.0.0.1:11434/v1"></div>
   <div class="setrow"><label>API key</label>
@@ -177,14 +193,7 @@ main{flex:1; display:flex; min-height:0}
     <div id="facts"></div>
     <div style="height:22px"></div>
     <h3>Commands</h3>
-    <div id="cmds">
-      <div class="cmd"><b>/skills</b> full skill list</div>
-      <div class="cmd"><b>/memory</b> what she remembers</div>
-      <div class="cmd"><b>/status</b> model + connection</div>
-      <div class="cmd"><b>/forget</b> drop a fact</div>
-      <div class="cmd"><b>/rename</b> rename a skill</div>
-      <div class="cmd"><b>/clear</b> clear this chat</div>
-    </div>
+    <div id="cmds"></div>
     <div style="height:22px"></div>
     <h3>Colour key</h3>
     <div class="cmd" style="color:var(--cyan)">■ her answer</div>
@@ -203,13 +212,37 @@ main{flex:1; display:flex; min-height:0}
       <textarea id="msg" rows="1" placeholder="Ask her something…  (↑ / ↓ for history, Enter to send)"></textarea>
       <button id="send">Send</button>
     </div>
-    <div class="hint">Enter sends · Shift+Enter newline · ↑ ↓ scroll through previous messages</div>
+    <div id="palette"></div>
+    <div class="hint">Enter sends · Shift+Enter newline · ↑ ↓ scroll through previous messages · type / for commands</div>
   </div>
 </main>
 
 <script>
 const $  = s => document.querySelector(s);
 const chat = $("#chat"), msg = $("#msg"), send = $("#send");
+
+/* ---------- command registry (single source of truth) ---------- */
+const COMMANDS = [
+  ["/model",         "switch model + connection"],
+  ["/factoryreset", "wipe memory + config (needs --yes)"],
+  ["/skills",       "everything she's taught herself"],
+  ["/memory",       "facts she remembers"],
+  ["/status",       "model + connection"],
+  ["/forget",       "drop a fact"],
+  ["/upgrade",      "upgrade her code from a git repo"],
+  ["/evolve",       "re-seed brain + promote repeated actions"],
+  ["/rename",       "rename a skill"],
+  ["/quiet",        "hide her activity"],
+  ["/verbose",      "show her activity"],
+  ["/clear",        "clear this chat"],
+  ["/help",         "this list"],
+  ["/quit",         "goodbye"],
+];
+function renderCmds(){
+  const box = $("#cmds"); if(!box) return;
+  box.innerHTML = COMMANDS.map(([c,d]) =>
+    `<div class="cmd"><b>${c}</b> ${d}</div>`).join("");
+}
 
 /* ---------- command history (↑ / ↓) ---------- */
 const HKEY = "sara.history";
@@ -232,7 +265,62 @@ function caretOnFirstLine(){
 function caretOnLastLine(){
   return msg.value.indexOf("\n", msg.selectionStart) === -1;
 }
+/* ---------- command palette ---------- */
+const palette = $("#palette");
+let pItems = [];     // current filtered command list
+let pActive = 0;     // highlighted index
+
+function paletteOpen(){ return palette.classList.contains("show"); }
+
+function paletteUpdate(){
+  const v = msg.value;
+  // Show only while typing a bare command token: starts with '/' and no space yet.
+  const m = /^\/(\S*)$/.exec(v);
+  if(!m){
+    palette.classList.remove("show");
+    return;
+  }
+  const q = m[1].toLowerCase();
+  pItems = COMMANDS.filter(([c]) => c.slice(1).toLowerCase().startsWith(q));
+  if(!pItems.length){
+    palette.innerHTML = `<div class="phint">no matching commands</div>`;
+    palette.classList.add("show");
+    return;
+  }
+  if(pActive >= pItems.length) pActive = 0;
+  palette.innerHTML = pItems.map(([c,d],i) =>
+    `<div class="pitem ${i===pActive?'active':''}" data-i="${i}">`+
+    `<span class="c">${c}</span><span class="d">${d}</span></div>`).join("") +
+    `<div class="phint">↑ ↓ navigate · Enter / Tab to autofill · Esc to close</div>`;
+  palette.classList.add("show");
+  palette.querySelectorAll(".pitem").forEach(el => {
+    el.onclick = () => { pActive = +el.dataset.i; palettePick(); };
+    el.onmousemove = () => { if(pActive !== +el.dataset.i){ pActive = +el.dataset.i; highlightPalette(); } };
+  });
+}
+function highlightPalette(){
+  palette.querySelectorAll(".pitem").forEach(el =>
+    el.classList.toggle("active", +el.dataset.i === pActive));
+  const act = palette.querySelector(".pitem.active");
+  if(act) act.scrollIntoView({block:"nearest"});
+}
+function palettePick(){
+  const c = pItems[pActive][0];
+  msg.value = c + " ";          // autofill + trailing space, ready for args
+  palette.classList.remove("show");
+  autosize();
+  msg.focus();
+  requestAnimationFrame(() => msg.setSelectionRange(msg.value.length, msg.value.length));
+}
+
 msg.addEventListener("keydown", e => {
+  if(paletteOpen()){
+    if(e.key === "ArrowDown"){ e.preventDefault(); pActive = (pActive+1) % pItems.length; highlightPalette(); return; }
+    if(e.key === "ArrowUp"){   e.preventDefault(); pActive = (pActive-1+Math.max(pItems.length,1)) % pItems.length; highlightPalette(); return; }
+    if(e.key === "Enter" || e.key === "Tab"){ e.preventDefault(); palettePick(); return; }
+    if(e.key === "Escape"){ e.preventDefault(); palette.classList.remove("show"); return; }
+  }
+
   if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); submit(); return; }
 
   if(e.key === "ArrowUp" && caretOnFirstLine()){
@@ -259,7 +347,8 @@ function autosize(){
   msg.style.height = "auto";
   msg.style.height = Math.min(msg.scrollHeight, 190) + "px";
 }
-msg.addEventListener("input", autosize);
+msg.addEventListener("input", () => { autosize(); paletteUpdate(); });
+renderCmds();
 
 /* ---------- rendering ---------- */
 function turn(cls, who){
@@ -431,6 +520,24 @@ async function saveCfg(){
   refresh();
 }
 $("#saveCfg").onclick = saveCfg;
+
+/* Switch live connection: build a /model command from the settings fields
+   and run it through the chat (so it streams + shows in the transcript). */
+$("#switchConn").onclick = () => {
+  const p = $("#setProvider").value;
+  let cmd = "/model " + p;
+  if(p === "custom"){
+    const url = $("#setUrl").value.trim();
+    if(!url){ alert("Enter a Base URL for the custom connection"); return; }
+    cmd += " " + url;
+  }
+  const m = $("#setModel").value.trim();
+  if(m) cmd += " " + m;
+  const k = $("#setKey").value.trim();
+  if(k) cmd += " key:" + k;
+  msg.value = cmd;
+  submit();
+};
 
 $("#listModels").onclick = async () => {
   const pick = $("#modelPick");

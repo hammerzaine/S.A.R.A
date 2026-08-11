@@ -8,6 +8,12 @@ __pycache__/
 *.pyc
 *.bak*
 
+# build / environment artifacts
+.venv/
+dist-clean/
+audit-report.txt
+audit_full.py
+
 # user-requested exclusion
 link.txt
 

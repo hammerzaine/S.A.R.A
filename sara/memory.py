@@ -314,3 +314,23 @@ class Memory:
             "skills": self.skill_count(),
             "procedures": self.procedure_count(),
         }
+
+    def reset(self) -> dict:
+        """Wipe EVERY store — turns, facts, skills, procedures.
+
+        Used by /reset (factory reset). The DB file itself is kept (schema
+        re-created on next connect) so the agent keeps working immediately;
+        only the learned content is dropped. Returns the before/after counts.
+        """
+        before = self.stats()
+        self.db.executescript(
+            "DELETE FROM turns; "
+            "DELETE FROM facts; "
+            "DELETE FROM skills; "
+            "DELETE FROM procedures; "
+            "DELETE FROM sqlite_sequence WHERE name IN "
+            "('turns','facts','skills','procedures');"
+        )
+        self.db.commit()
+        after = self.stats()
+        return {"before": before, "after": after}

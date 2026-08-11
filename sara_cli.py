@@ -19,6 +19,18 @@ try:
 except ImportError:  # pragma: no cover - readline is stdlib on Linux
     readline = None
 
+# prompt_toolkit gives the Hermes-style "/"-command menu: type "/", get a live,
+# narrowing list of commands; Tab/Enter autofills; Up/Down navigate. We fall
+# back to plain input() if it isn't installed.
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.formatted_text import ANSI
+    from prompt_toolkit.history import FileHistory
+    _PTK = True
+except Exception:  # pragma: no cover - optional dependency
+    _PTK = False
+
 from sara.agent import Sara
 from sara.console import Console
 from sara.version_check import start_version_watch
@@ -56,11 +68,13 @@ def save_history() -> None:
         pass
 
 COMMANDS = [
+    ("/model", "switch model + connection"),
     ("/skills", "everything she's taught herself"),
     ("/memory", "facts she remembers"),
     ("/status", "model + connection"),
     ("/forget", "drop a fact"),
     ("/upgrade", "upgrade her code from a git repo"),
+    ("/factoryreset", "wipe memory + config (needs --yes)"),
     ("/rename", "rename a skill"),
     ("/quiet", "hide her reasoning"),
     ("/verbose", "show her reasoning"),
@@ -68,6 +82,72 @@ COMMANDS = [
     ("/help", "this list"),
     ("/quit", "goodbye"),
 ]
+
+
+# --- Hermes-style "/"-command menu (prompt_toolkit) -----------------------
+_CMD_WORDS = [c for c, _ in COMMANDS]
+
+
+class _CommandCompleter(Completer):
+    """Complete against the command list while typing a '/'-token.
+
+    WordCompleter drops the leading slash (treats it as a word boundary), so
+    '/fa' would match against 'fa' and never hit '/factoryreset'. We instead
+    complete on the whole '/...' token, mirroring the web palette behaviour.
+    """
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return
+        for cmd in _CMD_WORDS:
+            if cmd.startswith(text):
+                yield Completion(cmd, start_position=-len(text),
+                                 display=cmd)
+
+
+_CMD_COMPLETER = _CommandCompleter() if _PTK else None
+
+
+def _cli_prompt(console: "Console"):
+    """ANSI prompt for prompt_toolkit (its own escape handling, no \\001 marks)."""
+    if console.colour:
+        return ANSI("\n  \x1b[38;5;75m\x1b[1myou\x1b[0m \x1b[38;5;240m›\x1b[0m ")
+    return "\n  you > "
+
+
+def build_session():
+    """Return a PromptSession with command completion, or None if ptk missing.
+
+    Migrates any legacy readline-format history so it isn't lost on first run.
+    """
+    if not _PTK:
+        return None
+    sess = PromptSession(
+        history=FileHistory(HISTFILE),
+        completer=_CMD_COMPLETER,
+        complete_while_typing=True,
+    )
+    try:
+        raw = HISTFILE.read_text(encoding="utf-8").splitlines()
+        # ptk history is JSON-per-line; a plain line means legacy readline fmt.
+        if raw and not raw[0].lstrip().startswith("{"):
+            for ln in raw:
+                if ln.strip():
+                    sess.history.append_string(ln)
+    except (OSError, ValueError):
+        pass
+    return sess
+
+
+def read_line(session, console: "Console") -> str:
+    """Read one command line. Uses the ptk session when available, else input()."""
+    if session is None:
+        return input(console.prompt()).strip()
+    try:
+        return session.prompt(_cli_prompt(console)).strip()
+    except (EOFError, KeyboardInterrupt):
+        raise
 
 
 def show_splash(sara: Sara, console: Console) -> None:
@@ -108,10 +188,11 @@ def main() -> int:
 
     show_splash(sara, console)
     setup_history()
+    session = build_session()
 
     while True:
         try:
-            line = input(console.prompt()).strip()
+            line = read_line(session, console)
         except (EOFError, KeyboardInterrupt):
             console.speak("Right then. Talk soon.")
             return 0
@@ -199,6 +280,42 @@ def main() -> int:
             if r.returncode != 0:
                 console.info("usage: /upgrade [<repo-url> [branch]] | "
                              "backup | list | rollback <name>")
+            continue
+        if low.startswith("/factoryreset"):
+            rest = line[len("/factoryreset"):].strip().lower()
+            if rest not in ("--yes", "confirm", "-y", "yes"):
+                console.rule("factory reset")
+                print()
+                console.warn("This wipes EVERYTHING:")
+                console.warn("  · memory DB (turns / facts / skills / procedures)")
+                console.warn("  · SOUL.md (personality)")
+                console.warn("  · config.json + credentials.json (secrets)")
+                console.warn("Code + upgrade_state.json are preserved.")
+                console.info("To proceed, type:  /factoryreset --yes")
+                print()
+                continue
+            res = sara.reset_state(confirm=True)
+            if res.get("ok"):
+                console.info("factory reset complete — she's a blank slate.")
+                console.info("restart sara-web to pick up the blank state "
+                             "(or it restarts automatically if running as a service).")
+            else:
+                console.warn(f"reset failed: {res.get('error', res)}")
+            continue
+        if low == "/model" or low.startswith("/model "):
+            arg = line[len("/model"):].strip()
+            res = sara.cmd_model(arg)
+            if res.get("show"):
+                console.rule("connection")
+                console.info(f"  provider  {res['provider']}")
+                console.info(f"  endpoint  {res['base_url']}")
+                console.info(f"  model     {res['model']}")
+                console.info(f"  api key   {'set' if res['api_key_set'] else 'empty'}")
+                console.info("  presets: " + ", ".join(res['presets']))
+            elif res.get("ok"):
+                console.info(res.get("msg", "done"))
+            else:
+                console.warn(res.get("error", "failed"))
             continue
         if low.startswith("/"):
             console.warn(f"no such command: {line.split()[0]} — /help")
