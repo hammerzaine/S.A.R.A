@@ -630,6 +630,28 @@ async function refresh(announce, which){
   }
 }
 refresh();
+
+/* ---------- cross-device handoff: resume cue on first connect ---------- */
+let _resumeShown = false;
+async function showResumeIfAny(){
+  if(_resumeShown) return;           // only once per page load
+  try{
+    const s = await (await fetch("/api/status")).json();
+    if(!s.resume_available) return;
+    _resumeShown = true;
+    const ts = s.task_state || {};
+    const obj = ts.objective ? ts.objective : "(continuing our previous session)";
+    const done = (ts.done||[]).length ? "\n  ✓ " + ts.done.join("\n  ✓ ") : "";
+    const next = (ts.next||[]).length ? "\n  → " + ts.next.join("\n  → ") : "";
+    const cue = "Resuming where we left off: " + obj + "."
+              + (done||next ? "\n\nProgress so far:" + done + next : "")
+              + "\n\nI know where we are — tell me the next step and I'll carry on.";
+    const b = turn("sara","S.A.R.A");
+    renderAnswer(b, cue);
+  }catch(e){ /* offline — silently skip */ }
+}
+showResumeIfAny();
+
 setInterval(() => { if(!busy) refresh(); }, 15000);
 msg.focus();
 </script>

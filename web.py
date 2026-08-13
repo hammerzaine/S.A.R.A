@@ -162,6 +162,8 @@ def status():
         ],
         "memories": _sara.memory.facts(60),
         "tools": sorted(_sara.tools.keys()),
+        "task_state": st.get("task_state"),
+        "resume_available": st.get("resume_available", False),
     }
 
 
@@ -268,7 +270,7 @@ def _stream_upgrade(msg: str):
     """
     rest = msg[len("/upgrade"):].strip()
     if not rest or rest.lower() in ("status", "help"):
-        cargs = ["upgrade", "origin", "main"]
+        cargs = ["upgrade", "github", "main"]
     elif rest.split()[0] in ("backup", "list", "rollback", "status"):
         cargs = rest.split()
     else:
@@ -286,7 +288,8 @@ def _stream_upgrade(msg: str):
             success = proc.returncode == 0
             # The toolkit skipped the restart, so do it here (the web process
             # survives its own restart — systemd --user re-launches it).
-            if success:
+            # A no-op "already up to date" does not warrant a restart.
+            if success and "Already up to date" not in out:
                 try:
                     subprocess.run(
                         ["systemctl", "--user", "restart", "sara-web.service"],

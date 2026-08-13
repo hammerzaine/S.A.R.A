@@ -1101,7 +1101,7 @@ class Sara:
             # one-typo-proof path: the user just says "upgrade" and she
             # self-updates. Memory (data/) + SOUL.md are preserved by
             # sara_upgrade.py (.gitignored / PROTECTED), so nothing is erased.
-            return "origin main"
+            return "github main"
         url = m.group(0).strip().rstrip(").,")
         # optional branch after "branch <x>" or "<url> <branch>"
         bm = _re.search(r"(?:branch\s+|(?<=\s))("
@@ -2340,6 +2340,12 @@ class Sara:
         s["base_url"] = self.cfg.get("base_url")
         s["no_research"] = bool(self.cfg.get("no_research"))
         s["online"] = self.llm.available()
+        # Cross-device handoff: surface the standing task + whether a fresh
+        # client has context to resume (recent history OR a live task).
+        task = self.memory.get_task_state()
+        s["task_state"] = task
+        s["resume_available"] = bool(task and task.get("objective")) \
+            or self.memory.turn_count() > 0
         return s
 
     def _wipe_file(self, path: Path) -> bool:

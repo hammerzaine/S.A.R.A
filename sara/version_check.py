@@ -33,7 +33,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-_REMOTE = "origin"
+_REMOTE = "github"
 _BRANCH = "main"
 _TIMEOUT = 15  # seconds - fail fast, don't hang boot
 _DEFAULT_GH_REPO = "hammerzaine/S.A.R.A"

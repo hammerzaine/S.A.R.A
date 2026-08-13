@@ -266,7 +266,7 @@ def main() -> int:
             rest = line[len("/upgrade"):].strip()
             if not rest or rest.lower() in ("status", "help"):
                 # bare "/upgrade" → pull origin/main, the default source
-                cargs = ["upgrade", "origin", "main"]
+                cargs = ["upgrade", "github", "main"]
             elif rest.split()[0] in ("backup", "list", "rollback", "status"):
                 # explicit subcommand: /upgrade backup | list | rollback <name>
                 cargs = rest.split()

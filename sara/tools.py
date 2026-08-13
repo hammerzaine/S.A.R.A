@@ -13,6 +13,8 @@ whose entrypoint wasn't named `run` silently returned None and the model saw
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import json
 import os
 import re
@@ -2137,6 +2139,109 @@ echo "=== PROBE PATHS ==="; export HOSTNAME; for p in / /work/ /books/ /mtg/ /mt
         return f"inventory of {r.get('host')}: {len(lines)} lines collected"
 
 
+class TaskTool(Tool):
+    """Maintain the STANDING TASK STATE — the spine of a cross-device handoff.
+
+    When the user switches devices (phone -> computer) the *same* always-on
+    S.A.R.A instance keeps its memory, but a fresh client sees an empty chat.
+    This tool lets S.A.R.A record what we're doing / what's next so a new
+    client (or a new day) can be told "I know where we are" without re-briefing.
+
+    Forms:
+      task <objective>        set the current standing objective
+      task append <step>      add a sub-step to the 'next' list
+      task done <step>        mark a sub-step complete (moves to done)
+      task clear              wipe the standing task state
+      task show               show current task state
+    """
+    name = "task"
+    description = ("Record the STANDING TASK / objective so a handoff between "
+                  "devices is seamless. Use it whenever the user starts or "
+                  "changes a multi-step job, so a fresh client can resume "
+                  "without re-briefing.")
+    usage = "task <objective> | task append <step> | task done <step> | task clear | task show"
+
+    def __init__(self, root: Path | None = None):
+        # Default to the SARA repo root (parent of sara/), which is where
+        # sara.db + task_state.json live — exactly the agent's Memory dir.
+        self.root = Path(root) if root else \
+            Path(__file__).resolve().parent.parent
+
+    def _mem(self):
+        # Load Memory directly from its file path so this tool never depends
+        # on `sara` being importable as a package (it works whether called
+        # from the running web app or a standalone test).
+        mem_path = self.root / "sara" / "memory.py"
+        spec = importlib.util.spec_from_file_location("sara_memory_rt", mem_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.Memory(self.root / "data" / "sara.db")
+
+    def run(self, arg: str) -> dict:
+        arg = (arg or "").strip()
+        if not arg:
+            return {"ok": False,
+                    "error": "usage: task <objective> | append | done | clear | show"}
+        low = arg.lower()
+        mem = self._mem()
+        try:
+            if low == "clear":
+                mem.set_task_state(None)
+                return {"ok": True, "cleared": True}
+            if low == "show":
+                return {"ok": True, "task_state": mem.get_task_state()}
+            if low.startswith("append "):
+                step = arg[7:].strip()
+                if not step:
+                    return {"ok": False, "error": "task append needs a step"}
+                ts: dict = mem.get_task_state() or {"objective": "(none set)"}
+                ts.setdefault("next", [])
+                ts.setdefault("done", [])
+                ts["next"].append(step)
+                mem.set_task_state(ts)
+                return {"ok": True, "appended": step, "task_state": ts}
+            if low.startswith("done "):
+                step = arg[5:].strip()
+                if not step:
+                    return {"ok": False, "error": "task done needs a step"}
+                ts: dict = mem.get_task_state() or {"objective": "(none set)"}
+                ts.setdefault("next", [])
+                ts.setdefault("done", [])
+                ts["next"] = [s for s in ts["next"]
+                              if step.lower() not in s.lower()]
+                ts["done"].append(step)
+                mem.set_task_state(ts)
+                return {"ok": True, "completed": step, "task_state": ts}
+            # Default: set objective (the whole arg).
+            ts: dict = mem.get_task_state() or {}
+            ts["objective"] = arg
+            ts.setdefault("next", [])
+            ts.setdefault("done", [])
+            mem.set_task_state(ts)
+            return {"ok": True, "objective": arg, "task_state": ts}
+        finally:
+            mem.db.close()
+
+    def summary(self, r: dict) -> str:
+        if not r.get("ok"):
+            return f"✗ task: {r.get('error', 'failed')}"
+        if r.get("cleared"):
+            return "task state cleared"
+        if "appended" in r:
+            return f"task step added: {r['appended']}"
+        if "completed" in r:
+            return f"task step done: {r['completed']}"
+        if "objective" in r:
+            return f"standing task set: {r['objective']}"
+        if "task_state" in r:
+            ts = r["task_state"]
+            if not ts:
+                return "no standing task"
+            obj = ts.get("objective", "(none)")
+            return f"standing task: {obj}"
+        return "task updated"
+
+
 def build_registry(confirm=None) -> dict:
     tools = [ListDir(), FindPath(), ReadFile(), WriteFile(), AppendFile(),
              PatchFile(), EditSoul(),
@@ -2144,7 +2249,7 @@ def build_registry(confirm=None) -> dict:
              ScrapeCategories(), ScrapeJS(), WebBrowse(),
              MariaDB(), SSHRun(), WinRun(), DBImport(), SeeImage(),
              ConfigTool(), ModelList(), UpgradeTool(), Rewrite(),
-             ServerInventory(), SendFile(),]
+             ServerInventory(), SendFile(), TaskTool(),]
     return {t.name: t for t in tools}
 
 

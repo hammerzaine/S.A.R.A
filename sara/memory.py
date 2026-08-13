@@ -90,6 +90,10 @@ class Memory:
             "INSERT INTO turns (role, content, ts) VALUES (?,?,?)",
             (role, text, time.time()))
         self.db.commit()
+        # Steady-state 2GB guard: evict oldest non-active turns as we go so
+        # the history never balloons unbounded. Never touches the newest
+        # KEEP_RECENT_TURNS (the live thread you're switching on).
+        self._maybe_trim()
 
     def recent(self, n: int = 12) -> list[dict]:
         rows = self.db.execute(
@@ -314,6 +318,70 @@ class Memory:
             "skills": self.skill_count(),
             "procedures": self.procedure_count(),
         }
+
+    # -- task state (the spine of a cross-device handoff) -----------------
+    # A tiny JSON ledger of the STANDING OBJECTIVE + what's done/next, so a
+    # fresh client (or new day) can be told "I know where we are" without a
+    # re-brief. Persisted next to the DB in data/task_state.json.
+    def get_task_state(self) -> dict | None:
+        p = self.path.parent / "task_state.json"
+        if not p.exists():
+            return None
+        try:
+            obj = json.loads(p.read_text())
+            return obj if isinstance(obj, dict) else None
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def set_task_state(self, state: dict | None) -> None:
+        p = self.path.parent / "task_state.json"
+        if state is None:
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+            return
+        state = dict(state)
+        state["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        p.write_text(json.dumps(state, indent=2))
+
+    # -- 2GB trim guard ---------------------------------------------------
+    # The user asked: once the conversation history reaches ~2GB, start
+    # trimming the oldest completed conversations as we go. We evict the
+    # OLDEST turns OUTSIDE the active recent window only — never the
+    # in-flight thread you're switching on — so a handoff never loses its
+    # context mid-task.
+    MAX_DB_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+    KEEP_RECENT_TURNS = 200                # never evict these newest turns
+
+    def _maybe_trim(self) -> int:
+        """Trim oldest non-active turns if the DB exceeds the 2GB cap.
+
+        Returns the number of turns removed (0 if nothing done).
+        """
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return 0
+        if size < self.MAX_DB_BYTES:
+            return 0
+        # Count how many turns we can drop: everything older than the
+        # KEEP_RECENT_TURNS newest, but only whole conversations at a time
+        # would be ideal — we keep it simple and drop the oldest single
+        # turns beyond the window. This is a steady-state guard.
+        row = self.db.execute(
+            "SELECT MIN(id) AS lo FROM ("
+            "SELECT id FROM turns ORDER BY id DESC LIMIT ?)",
+            (self.KEEP_RECENT_TURNS,)).fetchone()
+        if not row or row["lo"] is None:
+            return 0
+        cutoff = row["lo"] - 1  # ids strictly below this are evictable
+        if cutoff <= 0:
+            return 0
+        cur = self.db.execute("DELETE FROM turns WHERE id <= ?", (cutoff,))
+        self.db.commit()
+        return cur.rowcount
 
     def reset(self) -> dict:
         """Wipe EVERY store — turns, facts, skills, procedures.

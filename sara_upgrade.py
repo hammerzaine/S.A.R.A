@@ -82,6 +82,29 @@ def get_version() -> str:
     return "unknown"
 
 
+def _parse_version(v: str) -> tuple[int, int, int]:
+    """Best-effort semver parse: '3.3.3' -> (3, 3, 3). Non-numeric -> 0."""
+    import re as _re
+    parts: list[int] = []
+    for p in v.split("."):
+        m = _re.match(r"\d+", p)
+        parts.append(int(m.group()) if m else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def _read_version(root: Path) -> str:
+    """Read __version__ from a sara install root (not just this one)."""
+    f = root / "sara" / "__init__.py"
+    if f.exists():
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("__version__"):
+                return line.split("=", 1)[1].strip().strip('"\'')
+    return "unknown"
+
+
 def set_version(v: str) -> None:
     txt = VERSION_FILE.read_text()
     new_lines = []
@@ -329,11 +352,9 @@ def upgrade(repo_url: str, branch: str = "main",
         except Exception:
             pass
     ver_before = get_version()
-    print(f"[1/5] backing up current install (v{ver_before})…")
-    bk = backup(label=f"pre-upgrade-from-{ver_before}")
-    print(f"      backup: {bk.name}")
+    is_url = repo_url.startswith(("http://", "https://", "git@", "ssh://"))
 
-    print(f"[2/5] fetching {repo_url} ({branch})…")
+    print(f"[1/5] fetching {repo_url} ({branch})…")
     tmp = ROOT / ".upgrade_tmp"
     if tmp.exists():
         shutil.rmtree(tmp)
@@ -344,6 +365,24 @@ def upgrade(repo_url: str, branch: str = "main",
         print(f"      git clone failed: {e.stderr[:300]}")
         print("      no changes made.")
         return 2
+
+    # Version gate: for a bare-remote upgrade (e.g. "github main"), only
+    # proceed when the remote is STRICTLY newer than the local install.
+    # Honors the standing rule: /update must never downgrade or redundantly
+    # re-pull. Explicit URL upgrades always proceed.
+    if not is_url:
+        remote_ver = _read_version(tmp)
+        if remote_ver != "unknown" and ver_before != "unknown" \
+                and _parse_version(remote_ver) <= _parse_version(ver_before):
+            print(f"[skip] remote v{remote_ver} is not newer than local "
+                  f"v{ver_before}.")
+            print("       Already up to date — nothing to do.")
+            shutil.rmtree(tmp, ignore_errors=True)
+            return 0
+
+    print(f"[2/5] backing up current install (v{ver_before})…")
+    bk = backup(label=f"pre-upgrade-from-{ver_before}")
+    print(f"      backup: {bk.name}")
 
     pre_protected = _snapshot_protected()
     print("[3/5] copying safe files into install (preserving local "
