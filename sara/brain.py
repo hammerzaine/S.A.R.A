@@ -30,7 +30,7 @@ class LLM:
     """Talks to an OpenAI-compatible endpoint (Ollama by default)."""
 
     def __init__(self, base_url: str, model: str, api_key: str | None = None,
-                 timeout: int = 900, keep_alive: str = "-1"):
+                 timeout: int = 1800, keep_alive: str = "-1"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key

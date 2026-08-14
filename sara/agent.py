@@ -358,6 +358,11 @@ class Sara:
         self.soul = (SOUL.read_text().strip() if SOUL.exists() else "") or DEFAULT_SOUL
         self._pending_confirm = None
         self._upgrade = None  # type: dict | None  # populated at web-startup by version_check
+        # model-keeper state
+        self._keeper_thread = None
+        self._keeper_stop = False
+        self._keeper_last_hot = True
+        self._model_warmed_once = False
 
         # HARD-CODED EVOLUTION (seed on first boot): a clean build's empty DB
         # instantly re-learns the core environment + her own capabilities. This
@@ -371,35 +376,69 @@ class Sara:
 
     def _make_llm(self) -> "LLM":
         """Build an LLM client from the current config."""
+        try:
+            to = int(self.cfg.get("timeout", 1800))
+        except (TypeError, ValueError):
+            to = 1800
         return LLM(self.cfg["base_url"], self.cfg["model"],
                    api_key=self.cfg.get("api_key") or None,
-                   timeout=self.cfg.get("timeout", 900),
+                   timeout=to,
                    keep_alive=self.cfg.get("keep_alive", "-1"))
 
     def keep_model_hot(self) -> bool:
         """Pin the current model in VRAM so it never cold-loads mid-session.
 
-        Sends a tiny keep-alive ping to the Ollama host with keep_alive=-1.
-        This matters on slow LAN links where reloading a multi-GB model can
-        take longer than the read-timeout budget. Returns True if the host
-        answered (model is warm) or False if unreachable.
+        Sends a keep-alive ping to the Ollama host. Crucially, this uses the
+        FULL read-timeout (not a short one): on a slow link the model may be
+        cold and the load itself can take minutes — if we capped this at 30s the
+        ping would time out and never actually finish loading, leaving the model
+        cold. With the full budget the ping completes the load and pins it.
+
+        Returns True if the host answered (model is now warm) or False if
+        unreachable / the load exceeded even the full timeout.
         """
         import requests
         ka = self.cfg.get("keep_alive", "-1")
+        # Use the LLM's resolved read-timeout as the budget. On a slow link the
+        # model may be cold and the load itself takes minutes — capping this
+        # short would make the ping time out and never finish loading, leaving
+        # the model cold. The full budget lets the ping complete the load.
+        read_timeout = int(self.llm.timeout)
         url = f"{self.llm.base_url}/api/generate"
         try:
             requests.post(url, json={"model": self.llm.model,
                                      "keep_alive": ka, "prompt": " ",
                                      "stream": False},
-                          timeout=(15, 30))
+                          timeout=(15, read_timeout))
             return True
         except Exception:
             return False
 
-    def start_model_keeper(self, interval: int = 120) -> None:
+    def warm_up_model(self) -> bool:
+        """Best-effort preload of the model before a user turn, with the full
+        read-timeout, so a cold remote model loads once (with feedback) instead
+        of the chat call hanging. Returns True if the model is warm after the
+        call.
+
+        We detect 'cold' cheaply: the first chat in a session, or if the keeper
+        reported the host unreachable last tick. The actual load runs inside
+        keep_model_hot using the full budget.
+        """
+        # If the keeper saw the host go unreachable, force a warm attempt now.
+        was_cold = getattr(self, "_keeper_last_hot", True) is False
+        if not was_cold and getattr(self, "_model_warmed_once", False):
+            # already warmed this session and keeper says it's hot — skip
+            return True
+        hot = self.keep_model_hot()
+        self._model_warmed_once = hot
+        return hot
+
+    def start_model_keeper(self, interval: int = 15) -> None:
         """Background thread that re-pins the model every ``interval`` seconds
-        so a remote Ollama host can't evict it between turns. No-op if already
-        running. Honours a changing keep_alive via the live config each tick.
+        so a remote Ollama host can't evict it between turns. The remote host in
+        the field evicts within seconds of idle, so the default is short (15s) —
+        a no-op /api/generate is cheap and keeps the model permanently resident.
+        No-op if already running. Honours a changing keep_alive via config.
         """
         if getattr(self, "_keeper_thread", None) and self._keeper_thread.is_alive():
             return
@@ -408,7 +447,7 @@ class Sara:
             while not getattr(self, "_keeper_stop", False):
                 # re-read interval/keep_alive each tick so /set takes effect
                 iv = max(5, int(self.cfg.get("keeper_interval", interval)))
-                self.keep_model_hot()
+                self._keeper_last_hot = self.keep_model_hot()
                 # sleep in small slices (<=5s) so a stop flag is noticed promptly
                 slice_t = min(5, iv)
                 for _ in range(max(1, iv // slice_t)):
@@ -2334,13 +2373,20 @@ class Sara:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Re-pin the model in VRAM before we rely on it this turn. On a remote
-        # Ollama host over a slow link a cold-load can exceed the timeout budget,
-        # so we keep it warm (keep_alive from config; default -1 = pinned).
-        try:
-            self.keep_model_hot()
-        except Exception:
-            pass
+        # Preload the model before we rely on it this turn. On a remote Ollama
+        # host over a slow link a cold-load can take minutes; the keeper (every
+        # 15s) normally keeps it warm, but the very first turn (or after an idle
+        # eviction) needs a load. We warm it here *with the full read-timeout*
+        # and a visible notice so the user never stares at a frozen prompt.
+        if not getattr(self, "_model_warmed_once", False):
+            hot = getattr(self, "_keeper_last_hot", None)
+            if hot is not True:
+                c.info("⏳ loading model from remote host (first turn can take a "
+                       "minute on a slow link)…")
+            try:
+                self.warm_up_model()
+            except Exception:
+                pass
 
         messages = [{"role": "system", "content": self._system_prompt(user_msg)}]
         stateful = self._is_state_question(user_msg)
