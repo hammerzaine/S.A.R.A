@@ -80,8 +80,13 @@ class EventConsole(Console):
     def rule(self, label: str = "") -> None:
         pass
 
-    def splash(self, *a, **k) -> None:
-        pass
+    def splash(self, *a, upgrade: dict | None = None, **k) -> None:
+        # Surface an available upgrade as a chat event so the web UI shows it
+        # as a message in conversation (mirrors the CLI post-splash line).
+        if upgrade and upgrade.get("available"):
+            self._emit("upgrade", available=True,
+                       latest=upgrade.get("latest"),
+                       remote=upgrade.get("remote"))
 
     class _NullSpin:
         def __enter__(self):
@@ -108,6 +113,11 @@ _sara = Sara(console=_console)
 # /api/status can report it. Compares the local git HEAD against the remote
 # 'main' HEAD (works for private repos via the existing deploy key / PAT).
 start_version_watch(lambda r: setattr(_sara, "_upgrade", r))
+
+# Surface a pending upgrade as a chat event on boot (the browser renders it as
+# an in-conversation notice). EventConsole.splash is a no-op unless an upgrade
+# is available, so this is safe to call unconditionally.
+_console.splash(upgrade=_sara._upgrade)
 
 # Announce at boot (goes to the service journal / stdout).
 _up = _sara._upgrade or {}

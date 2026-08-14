@@ -154,16 +154,17 @@ def read_line(session, console: "Console") -> str:
 
 def show_splash(sara: Sara, console: Console) -> None:
     st = sara.status()
+    up = getattr(sara, "_upgrade", None) or {}
     console.splash(model=st["model"],
                    skills=sara.memory.all_skills(),
                    facts=st["facts"],
                    online=st["online"],
                    commands=COMMANDS,
-                   version=st.get("version", "unknown"))
+                   version=st.get("version", "unknown"),
+                   upgrade=up if up.get("available") else None)
     if not st["online"]:
         console.warn(f"the model at {sara.cfg['base_url']} isn't answering — "
                      "start it with:  ollama serve")
-    up = getattr(sara, "_upgrade", None) or {}
     if up.get("available"):
         console.info("★ a newer version is available — type /upgrade to pull it")
 

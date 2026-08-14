@@ -86,7 +86,8 @@ class Console:
     # -- splash ------------------------------------------------------------
     def splash(self, model: str, skills: list[dict], facts: int,
                online: bool, commands: list[tuple[str, str]],
-               version: str = "unknown") -> None:
+               version: str = "unknown",
+               upgrade: dict | None = None) -> None:
         w = term_width()
         inner = w - 4
 
@@ -123,6 +124,16 @@ class Console:
         pad = max(0, (inner - visible_len(status)) // 2)
         row(" " * pad + status)
         row()
+
+        # Upgrade banner (inside the box, when one is available)
+        if upgrade and upgrade.get("available"):
+            latest = upgrade.get("latest")
+            tag = latest[:8] if isinstance(latest, str) and latest else ""
+            row(self._c("◆ UPGRADE AVAILABLE", AMBER + BOLD))
+            row(self._c(
+                f"  a newer version is available — type /upgrade to pull it"
+                f"{('  (' + tag + ')') if tag else ''}", AMBER + DIM))
+            row()
 
         # Commands
         row(self._c("COMMANDS", AMBER + BOLD))
