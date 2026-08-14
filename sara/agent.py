@@ -372,7 +372,8 @@ class Sara:
         """Build an LLM client from the current config."""
         return LLM(self.cfg["base_url"], self.cfg["model"],
                    api_key=self.cfg.get("api_key") or None,
-                   timeout=self.cfg.get("timeout", 300))
+                   timeout=self.cfg.get("timeout", 600),
+                   keep_alive=self.cfg.get("keep_alive", "5m"))
 
     def set_config(self, key: str, value) -> dict:
         """Change a live setting, persist it, and re-sync derived state.

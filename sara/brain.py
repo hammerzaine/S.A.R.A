@@ -30,34 +30,64 @@ class LLM:
     """Talks to an OpenAI-compatible endpoint (Ollama by default)."""
 
     def __init__(self, base_url: str, model: str, api_key: str | None = None,
-                 timeout: int = 180):
+                 timeout: int = 600, keep_alive: str = "5m"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        # how long Ollama keeps the model loaded after a request. "5m" avoids
+        # reloading the multi-GB weights on every turn over a slow LAN.
+        self.keep_alive = keep_alive
 
     def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        # keep_alive: pin the model in VRAM between turns so a remote Ollama
+        # host doesn't reload the (multi-GB) weights on every request — cold
+        # loads over the LAN can exceed the read timeout.
         payload = {"model": self.model, "messages": messages,
-                   "temperature": temperature, "stream": False}
+                   "temperature": temperature, "stream": True,
+                   "keep_alive": self.keep_alive}
+
         try:
-            r = requests.post(f"{self.base_url}/chat/completions",
-                              json=payload, headers=headers,
-                              timeout=self.timeout)
+            # stream=True: tokens arrive as they're produced, so the connection
+            # never goes idle and a slow cold-load can't trip read-timeout.
+            with requests.post(f"{self.base_url}/chat/completions",
+                               json=payload, headers=headers,
+                               timeout=self.timeout, stream=True) as r:
+                if r.status_code != 200:
+                    raise RuntimeError(f"model returned HTTP {r.status_code}: "
+                                       f"{r.text[:200]}")
+                content = []
+                for line in r.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        chunk = line[len("data:"):].strip()
+                        if chunk == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(chunk)
+                        except (ValueError, json.JSONDecodeError):
+                            continue
+                        delta = (data.get("choices") or [{}])[0] \
+                            .get("message", {}) or \
+                            (data.get("choices") or [{}])[0].get("delta", {})
+                        piece = delta.get("content")
+                        if piece:
+                            content.append(piece)
+                return "".join(content) or ""
         except requests.exceptions.ConnectionError as e:
             raise ConnectionError(
                 f"can't reach the model at {self.base_url} — is it running?"
             ) from e
-        if r.status_code != 200:
-            raise RuntimeError(f"model returned HTTP {r.status_code}: "
-                               f"{r.text[:200]}")
-        data = r.json()
-        try:
-            return data["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError):
-            raise RuntimeError(f"unexpected model response: {str(data)[:200]}")
+        except requests.exceptions.ReadTimeout as e:
+            raise TimeoutError(
+                f"model at {self.base_url} took too long to respond "
+                f"(>{self.timeout}s). If it's a remote Ollama host, the model "
+                f"may be cold-loading — try again, or set a higher 'timeout'."
+            ) from e
 
     def available(self) -> bool:
         try:
