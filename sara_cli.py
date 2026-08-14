@@ -193,6 +193,10 @@ def main() -> int:
     setup_history()
     session = build_session()
 
+    # Keep the model pinned in VRAM (matters on slow remote Ollama links where a
+    # cold-load between turns can exceed the timeout budget).
+    sara.start_model_keeper()
+
     while True:
         try:
             line = read_line(session, console)

@@ -8,6 +8,7 @@ import sys
 import re as _re
 import subprocess
 import time
+import threading
 from pathlib import Path
 
 from .brain import (LLM, parse_action, parse_learnings, parse_memories,
@@ -373,7 +374,52 @@ class Sara:
         return LLM(self.cfg["base_url"], self.cfg["model"],
                    api_key=self.cfg.get("api_key") or None,
                    timeout=self.cfg.get("timeout", 900),
-                   keep_alive=self.cfg.get("keep_alive", "5m"))
+                   keep_alive=self.cfg.get("keep_alive", "-1"))
+
+    def keep_model_hot(self) -> bool:
+        """Pin the current model in VRAM so it never cold-loads mid-session.
+
+        Sends a tiny keep-alive ping to the Ollama host with keep_alive=-1.
+        This matters on slow LAN links where reloading a multi-GB model can
+        take longer than the read-timeout budget. Returns True if the host
+        answered (model is warm) or False if unreachable.
+        """
+        import requests
+        ka = self.cfg.get("keep_alive", "-1")
+        url = f"{self.llm.base_url}/api/generate"
+        try:
+            requests.post(url, json={"model": self.llm.model,
+                                     "keep_alive": ka, "prompt": " ",
+                                     "stream": False},
+                          timeout=(15, 30))
+            return True
+        except Exception:
+            return False
+
+    def start_model_keeper(self, interval: int = 120) -> None:
+        """Background thread that re-pins the model every ``interval`` seconds
+        so a remote Ollama host can't evict it between turns. No-op if already
+        running. Honours a changing keep_alive via the live config each tick.
+        """
+        if getattr(self, "_keeper_thread", None) and self._keeper_thread.is_alive():
+            return
+
+        def loop():
+            while not getattr(self, "_keeper_stop", False):
+                # re-read interval/keep_alive each tick so /set takes effect
+                iv = max(5, int(self.cfg.get("keeper_interval", interval)))
+                self.keep_model_hot()
+                # sleep in small slices (<=5s) so a stop flag is noticed promptly
+                slice_t = min(5, iv)
+                for _ in range(max(1, iv // slice_t)):
+                    if getattr(self, "_keeper_stop", False):
+                        return
+                    time.sleep(slice_t)
+
+        t = threading.Thread(target=loop, daemon=True)
+        self._keeper_thread = t
+        self._keeper_stop = False
+        t.start()
 
     def set_config(self, key: str, value) -> dict:
         """Change a live setting, persist it, and re-sync derived state.
@@ -2288,6 +2334,14 @@ class Sara:
             except (json.JSONDecodeError, OSError):
                 pass
 
+        # Re-pin the model in VRAM before we rely on it this turn. On a remote
+        # Ollama host over a slow link a cold-load can exceed the timeout budget,
+        # so we keep it warm (keep_alive from config; default -1 = pinned).
+        try:
+            self.keep_model_hot()
+        except Exception:
+            pass
+
         messages = [{"role": "system", "content": self._system_prompt(user_msg)}]
         stateful = self._is_state_question(user_msg)
         if not stateful:
@@ -2330,7 +2384,7 @@ class Sara:
                 with c.thinking("thinking") as sp:
                     sp.tick()
                     reply = self.llm.chat(messages)
-            except (ConnectionError, RuntimeError) as e:
+            except (ConnectionError, RuntimeError, TimeoutError) as e:
                 c.error(str(e))
                 self.memory.log("system", f"[llm-failure] {e}")
                 return str(e)

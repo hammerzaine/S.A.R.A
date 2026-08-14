@@ -114,6 +114,10 @@ _sara = Sara(console=_console)
 # 'main' HEAD (works for private repos via the existing deploy key / PAT).
 start_version_watch(lambda r: setattr(_sara, "_upgrade", r))
 
+# Keep the model pinned in VRAM (slow remote Ollama links can cold-load between
+# turns faster than the timeout budget allows).
+_sara.start_model_keeper()
+
 # Surface a pending upgrade as a chat event on boot (the browser renders it as
 # an in-conversation notice). EventConsole.splash is a no-op unless an upgrade
 # is available, so this is safe to call unconditionally.
