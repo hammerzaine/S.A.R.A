@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import re as _re
 import subprocess
 import time
@@ -68,6 +69,11 @@ DEFAULT_CONFIG = {
     "verbose": True,
     "no_research": False,   # when True, do NOT use the internet / web tools
 }
+
+# Canonical source for /upgrade and /update — the rest is in code, so a bare
+# command always pulls from here without needing a git remote configured.
+DEFAULT_UPGRADE_REPO = "https://github.com/hammerzaine/S.A.R.A.git"
+DEFAULT_UPGRADE_BRANCH = "main"
 
 # Default personality injected when SOUL.md is empty. A packed build ships
 # SOUL.md blank (0 bytes) so the next person starts anonymous; if they never
@@ -492,6 +498,203 @@ class Sara:
     def get_config(self) -> dict:
         return {"ok": True, "config": dict(self.cfg),
                 "provider_presets": list(PROVIDERS)}
+
+    # -- /setup: guided provider connect ----------------------------------
+    def cmd_setup(self, arg: str, console=None) -> dict:
+        """Guided provider connect for the /setup command.
+
+        Interactive (terminal) flow:
+          /setup              -> prompt for the base URL, an optional API key,
+                                 then list the live models and let you pick one.
+
+        Inline / non-interactive forms (web, scripts, one-shot):
+          /setup <url>
+          /setup <url> key:<KEY>
+          /setup <url> model:<NAME>
+          /setup <url> key:<KEY> model:<NAME>
+
+        Always connects (provider -> the matching preset, or 'custom' for an
+        arbitrary OpenAI-compatible URL), then queries /models live and selects
+        the chosen model. Returns a dict the CLI/web renderers display.
+        """
+        import re as _re
+        arg = (arg or "").strip()
+
+        # ---- parse inline form (a URL is present) ------------------------
+        inline = bool(arg) and ("http" in arg or "url:" in arg)
+        url = api_key = model_arg = None
+        if inline:
+            mu = _re.search(r"(?:url:)?(https?://\S+)", arg)
+            if mu:
+                url = mu.group(1).rstrip("/")
+            km = _re.search(r"key:(\S+)", arg)
+            if km:
+                api_key = km.group(1)
+            mm = _re.search(r"model:(\S+)", arg, _re.I)
+            if mm:
+                model_arg = mm.group(1)
+
+        interactive = (hasattr(sys, "stdin") and sys.stdin
+                       and sys.stdin.isatty())
+        if not url:
+            if not interactive:
+                return {"ok": False,
+                        "error": "no URL given and not running in a terminal — "
+                                 "use: /setup <url> [key:KEY] [model:NAME]"}
+            url = self._prompt(
+                "Provider base URL (OpenAI-compatible, e.g. "
+                "https://api.openai.com/v1): ").strip().rstrip("/")
+            if not url:
+                return {"ok": False, "error": "no URL supplied — aborted"}
+            if not url.startswith("http"):
+                return {"ok": False,
+                        "error": "base_url must start with http(s)://"}
+            api_key = self._prompt(
+                "API key (leave blank if the endpoint needs none): ").strip()
+
+        # ---- resolve provider preset if this URL is a known one ----------
+        prov_key = "custom"
+        for k, v in PROVIDERS.items():
+            if v and v.rstrip("/") == url.rstrip("/"):
+                prov_key = k
+                break
+        r1 = self.set_config("provider", prov_key)
+        if not r1.get("ok"):
+            return r1
+        if prov_key == "custom":
+            r2 = self.set_config("base_url", url)
+            if not r2.get("ok"):
+                return r2
+        else:
+            url = self.cfg.get("base_url", url)
+        if api_key:
+            self.set_config("api_key", api_key)
+
+        # ---- fetch the live model list -----------------------------------
+        fetched = self._fetch_models(url, api_key or "")
+        if not fetched.get("ok"):
+            return {"ok": True,
+                    "msg": f"connected to {url} ({prov_key}), but couldn't "
+                           f"list models: {fetched.get('error')}. Set one with "
+                           f"/model {prov_key} <model> or "
+                           f"/setup {url} model:<name>.",
+                    "connected": True, "provider": prov_key,
+                    "base_url": url, "models": []}
+
+        models = fetched["models"]
+        chosen = self._resolve_model(models, model_arg)
+
+        if chosen is None and models and interactive:
+            return self._guided_model_pick(models, url, prov_key, console)
+        if chosen is None and models:
+            # non-interactive: prefer a free-tier model, else the first
+            chosen = sorted(
+                models,
+                key=lambda m: (0 if ":free" in m.lower() else 1, m))[0]
+
+        if chosen is None:
+            return {"ok": True,
+                    "msg": f"connected to {url} ({prov_key}) but it reported "
+                           f"no models.",
+                    "connected": True, "provider": prov_key,
+                    "base_url": url, "models": []}
+
+        r3 = self.set_config("model", chosen)
+        if not r3.get("ok"):
+            return r3
+        return {"ok": True,
+                "msg": f"connected to {url} ({prov_key}) — model set to "
+                       f"'{chosen}'. {len(models)} model(s) available.",
+                "connected": True, "provider": prov_key, "model": chosen,
+                "models": models, "base_url": url,
+                "api_key_set": bool(api_key)}
+
+    @staticmethod
+    def _resolve_model(models, model_arg) -> str | None:
+        """Pick a model from the list given a user-supplied model token."""
+        if not model_arg:
+            return None
+        if model_arg in models:
+            return model_arg
+        hits = [m for m in models
+                if m == model_arg or m.endswith(model_arg)
+                or model_arg.lower() in m.lower()]
+        return hits[0] if len(hits) == 1 else None
+
+    def _guided_model_pick(self, models, url, prov_key, console=None) -> dict:
+        ordered = sorted(
+            models,
+            key=lambda m: (0 if ":free" in m.lower() else 1, m))
+        lines = [f"  Available models @ {url} ({len(models)}):"]
+        for i, m in enumerate(ordered, 1):
+            lines.append(f"    {i:>3}. {m}")
+        text = "\n".join(lines)
+        if console is not None and hasattr(console, "info"):
+            console.info(text)
+        else:
+            print(text)
+        pick = self._prompt(
+            "  Pick a number, or type a full model name: ").strip()
+        if pick.isdigit() and 1 <= int(pick) <= len(ordered):
+            chosen = ordered[int(pick) - 1]
+        elif pick in models:
+            chosen = pick
+        else:
+            chosen = self._resolve_model(models, pick)
+        if not chosen:
+            return {"ok": False,
+                    "error": f"'{pick}' didn't match any model — set one with "
+                             f"/model {prov_key} <model>."}
+        r = self.set_config("model", chosen)
+        if not r.get("ok"):
+            return r
+        return {"ok": True,
+                "msg": f"model set to '{chosen}'. {len(models)} model(s) "
+                       f"available @ {url}.",
+                "connected": True, "provider": prov_key, "model": chosen,
+                "models": models, "base_url": url}
+
+    @staticmethod
+    def _prompt(text: str) -> str:
+        try:
+            return input(text)
+        except (EOFError, KeyboardInterrupt):
+            return ""
+
+    @staticmethod
+    def _fetch_models(base_url: str, api_key: str = "") -> dict:
+        """Query an OpenAI-compatible /models endpoint and return its id list.
+
+        Independent of the running LLM so /setup can probe BEFORE connecting.
+        Returns {"ok": bool, "models": [str], "error": str|None}.
+        """
+        import requests
+        base_url = (base_url or "").rstrip("/")
+        if not base_url:
+            return {"ok": False, "models": [],
+                    "error": "no base_url supplied"}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        try:
+            r = requests.get(f"{base_url}/models", headers=headers,
+                             timeout=15)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "models": [],
+                    "error": f"can't reach {base_url}/models — {e}"}
+        if r.status_code != 200:
+            return {"ok": False, "models": [],
+                    "error": f"endpoint returned HTTP {r.status_code}: "
+                             f"{r.text[:160]}"}
+        try:
+            data = r.json()
+        except ValueError:
+            return {"ok": False, "models": [],
+                    "error": "endpoint returned non-JSON"}
+        models = [m.get("id") or m.get("name")
+                  for m in data.get("data", [])]
+        if not models and isinstance(data, list):
+            models = [m.get("id") or m.get("name") for m in data]
+        models = [m for m in models if m]
+        return {"ok": True, "models": models, "error": None}
 
     # -- safety (UNFILTERED build) ----------------------------------------
     # Destructive-command gate removed: every shell command runs as asked.

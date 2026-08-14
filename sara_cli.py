@@ -31,7 +31,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     _PTK = False
 
-from sara.agent import Sara
+from sara.agent import Sara, DEFAULT_UPGRADE_REPO, DEFAULT_UPGRADE_BRANCH
 from sara.console import Console
 from sara.version_check import start_version_watch
 from sara import evolution as sara_evolution
@@ -73,7 +73,9 @@ COMMANDS = [
     ("/memory", "facts she remembers"),
     ("/status", "model + connection"),
     ("/forget", "drop a fact"),
+    ("/setup", "connect a provider (URL + key, pick a model)"),
     ("/upgrade", "upgrade her code from a git repo"),
+    ("/update", "alias for /upgrade"),
     ("/factoryreset", "wipe memory + config (needs --yes)"),
     ("/rename", "rename a skill"),
     ("/quiet", "hide her reasoning"),
@@ -261,12 +263,28 @@ def main() -> int:
             n = sara.memory.forget(line[8:].strip())
             console.info(f"dropped {n} fact(s)")
             continue
+        if low.startswith("/update"):
+            # /update is a synonym for /upgrade; rewrite and fall through
+            line = "/upgrade" + line[6:]
+            low = line.lower()
+        if low.startswith("/setup"):
+            arg = line[len("/setup"):].strip()
+            res = sara.cmd_setup(arg, console=console)
+            if res.get("ok"):
+                console.info(res.get("msg", "done"))
+                if res.get("models"):
+                    console.info(f"  {len(res['models'])} model(s) available @ "
+                                 f"{res.get('base_url')}")
+            else:
+                console.warn(res.get("error", "setup failed"))
+            continue
         if low.startswith("/upgrade"):
             import subprocess
             rest = line[len("/upgrade"):].strip()
             if not rest or rest.lower() in ("status", "help"):
-                # bare "/upgrade" → pull origin/main, the default source
-                cargs = ["upgrade", "github", "main"]
+                # bare /upgrade and /update → pull the canonical source (in code)
+                cargs = ["upgrade", DEFAULT_UPGRADE_REPO,
+                         DEFAULT_UPGRADE_BRANCH]
             elif rest.split()[0] in ("backup", "list", "rollback", "status"):
                 # explicit subcommand: /upgrade backup | list | rollback <name>
                 cargs = rest.split()

@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from sara.agent import Sara
+from sara.agent import Sara, DEFAULT_UPGRADE_REPO, DEFAULT_UPGRADE_BRANCH
 from sara.console import Console
 from sara.version_check import start_version_watch
 
@@ -228,6 +228,11 @@ def ask(a: Ask):
         return StreamingResponse(iter([]), media_type="text/event-stream")
 
     # Slash command? Intercept locally so the small model never sees it.
+    if msg.startswith("/update"):
+        # /update is a synonym for /upgrade
+        msg = "/upgrade" + msg[6:]
+    if msg.startswith("/setup"):
+        return _stream_setup(msg)
     if msg.startswith("/upgrade"):
         return _stream_upgrade(msg)
     if msg.startswith("/factoryreset"):
@@ -270,7 +275,8 @@ def _stream_upgrade(msg: str):
     """
     rest = msg[len("/upgrade"):].strip()
     if not rest or rest.lower() in ("status", "help"):
-        cargs = ["upgrade", "github", "main"]
+        # bare /upgrade and /update → pull the canonical source (in code)
+        cargs = ["upgrade", DEFAULT_UPGRADE_REPO, DEFAULT_UPGRADE_BRANCH]
     elif rest.split()[0] in ("backup", "list", "rollback", "status"):
         cargs = rest.split()
     else:
@@ -309,6 +315,53 @@ def _stream_upgrade(msg: str):
         except subprocess.TimeoutExpired:
             _sink.put({"type": "error",
                        "text": "upgrade timed out after 10m"})
+        except Exception as e:  # noqa: BLE001
+            _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            _sink.put({"type": "done"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            ev = _sink.get()
+            yield f"data: {json.dumps(ev)}\n\n"
+            if ev.get("type") == "done":
+                return
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+def _stream_setup(msg: str):
+    """Run /setup from the web chat, streaming progress as SSE events.
+
+    The web runs headless (no TTY), so /setup must be given inline:
+        /setup <url> [key:KEY] [model:NAME]
+    It connects, fetches the live model list, and selects the model (a
+    specific one via model:<name>, or the first free-tier model otherwise).
+    """
+    rest = msg[len("/setup"):].strip()
+
+    def run():
+        try:
+            res = _sara.cmd_setup(rest)
+            ok = res.get("ok", False)
+            if res.get("models"):
+                shown = ", ".join(res["models"][:30])
+                _sink.put({"type": "result",
+                           "text": f"{len(res['models'])} models @ "
+                                   f"{res.get('base_url')}: {shown}",
+                           "ok": ok})
+            _sink.put({"type": "result",
+                       "text": (res.get("msg") or res.get("error", "")),
+                       "ok": ok})
+            _sink.put({
+                "type": "answer",
+                "text": (("✅ " + (res.get("msg") or "")) if ok
+                         else ("❌ " + (res.get("error") or "setup failed"))),
+            })
         except Exception as e:  # noqa: BLE001
             _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
         finally:
