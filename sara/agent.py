@@ -559,12 +559,16 @@ class Sara:
         r1 = self.set_config("provider", prov_key)
         if not r1.get("ok"):
             return r1
+        # persist the endpoint the user actually chose. For a known preset we
+        # store its canonical URL (avoids a stale config value overriding a
+        # fresh /setup); for a custom endpoint we store exactly what they typed
+        # (the http<->https downgrade below will normalise local providers).
         if prov_key == "custom":
             r2 = self.set_config("base_url", url)
-            if not r2.get("ok"):
-                return r2
         else:
-            url = self.cfg.get("base_url", url)
+            r2 = self.set_config("base_url", PROVIDERS.get(prov_key, url))
+        if not r2.get("ok"):
+            return r2
         if api_key:
             self.set_config("api_key", api_key)
 
@@ -585,8 +589,7 @@ class Sara:
             url = fetched.get("base_url_used", url)
             prov_key = self._match_preset(url)
             self.set_config("provider", prov_key)
-            if prov_key == "custom":
-                self.set_config("base_url", url)
+            self.set_config("base_url", url)  # always persist the working URL
 
         models = fetched["models"]
         chosen = self._resolve_model(models, model_arg)
