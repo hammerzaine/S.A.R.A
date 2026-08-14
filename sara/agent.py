@@ -553,11 +553,9 @@ class Sara:
                 "API key (leave blank if the endpoint needs none): ").strip()
 
         # ---- resolve provider preset if this URL is a known one ----------
-        prov_key = "custom"
-        for k, v in PROVIDERS.items():
-            if v and v.rstrip("/") == url.rstrip("/"):
-                prov_key = k
-                break
+        # (also match the http<->https variant so a https typo on a local
+        #  http provider still resolves to the right preset)
+        prov_key = self._match_preset(url)
         r1 = self.set_config("provider", prov_key)
         if not r1.get("ok"):
             return r1
@@ -580,6 +578,15 @@ class Sara:
                            f"/setup {url} model:<name>.",
                     "connected": True, "provider": prov_key,
                     "base_url": url, "models": []}
+
+        # if we had to downgrade https -> http to reach the endpoint, adopt
+        # the working URL and re-resolve the provider preset
+        if fetched.get("downgraded"):
+            url = fetched.get("base_url_used", url)
+            prov_key = self._match_preset(url)
+            self.set_config("provider", prov_key)
+            if prov_key == "custom":
+                self.set_config("base_url", url)
 
         models = fetched["models"]
         chosen = self._resolve_model(models, model_arg)
@@ -620,6 +627,25 @@ class Sara:
                 if m == model_arg or m.endswith(model_arg)
                 or model_arg.lower() in m.lower()]
         return hits[0] if len(hits) == 1 else None
+
+    @staticmethod
+    def _match_preset(url: str) -> str:
+        """Return the provider preset key for a URL (matching http<->https)."""
+        url = (url or "").rstrip("/")
+        for k, v in PROVIDERS.items():
+            if v and v.rstrip("/") == url:
+                return k
+        # try the scheme-swapped sibling (https typed for an http endpoint)
+        swapped = None
+        if url.startswith("https://"):
+            swapped = "http://" + url[len("https://"):]
+        elif url.startswith("http://"):
+            swapped = "https://" + url[len("http://"):]
+        if swapped:
+            for k, v in PROVIDERS.items():
+                if v and v.rstrip("/") == swapped:
+                    return k
+        return "custom"
 
     def _guided_model_pick(self, models, url, prov_key, console=None) -> dict:
         ordered = sorted(
@@ -666,35 +692,60 @@ class Sara:
         """Query an OpenAI-compatible /models endpoint and return its id list.
 
         Independent of the running LLM so /setup can probe BEFORE connecting.
-        Returns {"ok": bool, "models": [str], "error": str|None}.
+        Returns {"ok": bool, "models": [str], "error": str|None,
+                 "downgraded": bool, "base_url_used": str|None}.
+
+        If an https URL can't be reached, we transparently retry over http —
+        local providers (Ollama, etc.) almost always serve plain http, and a
+        stray https:// on the typed URL is the single most common mistake.
         """
         import requests
         base_url = (base_url or "").rstrip("/")
         if not base_url:
-            return {"ok": False, "models": [],
-                    "error": "no base_url supplied"}
+            return {"ok": False, "models": [], "error": "no base_url supplied",
+                    "downgraded": False, "base_url_used": None}
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        res = Sara._try_models(base_url, headers)
+        if res.get("ok"):
+            return res
+        # https failed (connection refused / SSL) -> retry the http sibling
+        if base_url.startswith("https://"):
+            http_url = "http://" + base_url[len("https://"):]
+            res2 = Sara._try_models(http_url, headers)
+            if res2.get("ok"):
+                res2["downgraded"] = True
+                res2["base_url_used"] = http_url
+                return res2
+            res["error"] = (res.get("error") or "") + " (also tried http)"
+        return res
+
+    @staticmethod
+    def _try_models(base_url: str, headers: dict) -> dict:
+        import requests
         try:
             r = requests.get(f"{base_url}/models", headers=headers,
                              timeout=15)
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "models": [],
-                    "error": f"can't reach {base_url}/models — {e}"}
+                    "error": f"can't reach {base_url}/models — {e}",
+                    "downgraded": False, "base_url_used": None}
         if r.status_code != 200:
             return {"ok": False, "models": [],
                     "error": f"endpoint returned HTTP {r.status_code}: "
-                             f"{r.text[:160]}"}
+                             f"{r.text[:160]}",
+                    "downgraded": False, "base_url_used": None}
         try:
             data = r.json()
         except ValueError:
-            return {"ok": False, "models": [],
-                    "error": "endpoint returned non-JSON"}
+            return {"ok": False, "models": [], "error": "endpoint returned "
+                    "non-JSON", "downgraded": False, "base_url_used": None}
         models = [m.get("id") or m.get("name")
                   for m in data.get("data", [])]
         if not models and isinstance(data, list):
             models = [m.get("id") or m.get("name") for m in data]
         models = [m for m in models if m]
-        return {"ok": True, "models": models, "error": None}
+        return {"ok": True, "models": models, "error": None,
+                "downgraded": False, "base_url_used": None}
 
     # -- safety (UNFILTERED build) ----------------------------------------
     # Destructive-command gate removed: every shell command runs as asked.
