@@ -89,6 +89,12 @@ main{flex:1; display:flex; min-height:0}
   border-left:2px solid var(--gold); padding:10px 13px; margin:9px 0;
   white-space:pre-wrap; font-size:13px; word-break:break-word;
 }
+.upgrade{
+  color:var(--amber); background:rgba(242,163,65,.08);
+  border-left:2px solid var(--amber); padding:11px 14px; margin:10px 0;
+  white-space:pre-wrap; font-size:13px;
+}
+.upgrade b{color:var(--amber); letter-spacing:.08em}
 /* ---------- composer ---------- */
 #composer{
   border-top:1px solid var(--line); background:var(--panel);
@@ -155,6 +161,7 @@ main{flex:1; display:flex; min-height:0}
   </div>
   <div class="spacer"></div>
   <div class="pill"><span id="dot" class="dot off"></span><span id="state">connecting</span></div>
+  <div class="pill" id="upgPill" style="display:none; border-color:var(--amber); color:var(--amber)">⬆ <span id="upgText">upgrade available</span></div>
   <div class="pill">provider <b id="prov">—</b></div>
   <div class="pill">model <b id="model">—</b></div>
   <div class="pill">skills <b id="nskills">0</b></div>
@@ -565,6 +572,7 @@ $("#listModels").onclick = async () => {
 
 /* ---------- status / sidebar ---------- */
 let showAll = false;
+let _upgChatShown = false;
 async function refresh(announce, which){
   try{
     const s = await (await fetch("/api/status")).json();
@@ -575,6 +583,25 @@ async function refresh(announce, which){
     $("#nfacts").textContent = s.facts;
     $("#state").textContent  = s.online ? "online" : "offline";
     $("#dot").className = "dot " + (s.online ? "on" : "off");
+    // Upgrade available? Flag the header pill + drop one chat notice per load.
+    const up = s.upgrade || {};
+    const pill = $("#upgPill"), upgText = $("#upgText");
+    if(up.available){
+      pill.style.display = "";
+      const tag = (up.latest && up.latest.length >= 8) ? up.latest.slice(0,8) : "";
+      upgText.textContent = tag ? `upgrade ${tag} available` : "upgrade available";
+      if(!_upgChatShown){
+        _upgChatShown = true;
+        const b = turn("sara","S.A.R.A");
+        const d = document.createElement("div"); d.className = "upgrade";
+        d.innerHTML = `<b>⬆ UPGRADE AVAILABLE</b><br>A newer version of S.A.R.A is ` +
+          `available${tag ? ` (${tag})` : ""}. Type <b>/upgrade</b> to pull it.`;
+        b.appendChild(d);
+        chat.scrollTop = chat.scrollHeight;
+      }
+    } else {
+      pill.style.display = "none";
+    }
 
     const box = $("#skills"); box.innerHTML = "";
     const shown = showAll ? s.skills : s.skills.slice(0,10);
