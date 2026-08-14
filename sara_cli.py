@@ -77,7 +77,7 @@ COMMANDS = [
     ("/upgrade", "upgrade her code from a git repo"),
     ("/update", "alias for /upgrade"),
     ("/factoryreset", "wipe memory + config (needs --yes)"),
-    ("/rename", "rename a skill"),
+    ("/set", "set a config value (timeout, keep_alive, …)"),
     ("/quiet", "hide her reasoning"),
     ("/verbose", "show her reasoning"),
     ("/clear", "redraw the screen"),
@@ -321,7 +321,7 @@ def main() -> int:
             else:
                 console.warn(f"reset failed: {res.get('error', res)}")
             continue
-        if low == "/model" or low.startswith("/model "):
+        if low.startswith("/model"):
             arg = line[len("/model"):].strip()
             res = sara.cmd_model(arg)
             if res.get("show"):
@@ -335,6 +335,16 @@ def main() -> int:
                 console.info(res.get("msg", "done"))
             else:
                 console.warn(res.get("error", "failed"))
+            continue
+        if low.startswith("/set "):
+            parts = line[5:].strip().split(None, 1)
+            if len(parts) != 2:
+                console.warn("usage: /set <key> <value>  (e.g. /set timeout 1200)")
+                continue
+            key, val = parts
+            res = sara.set_config(key, val)
+            (console.info if res.get("ok") else console.warn)(
+                res.get("msg") or res.get("error", "failed"))
             continue
         if low.startswith("/"):
             console.warn(f"no such command: {line.split()[0]} — /help")

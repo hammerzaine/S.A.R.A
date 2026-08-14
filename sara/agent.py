@@ -372,7 +372,7 @@ class Sara:
         """Build an LLM client from the current config."""
         return LLM(self.cfg["base_url"], self.cfg["model"],
                    api_key=self.cfg.get("api_key") or None,
-                   timeout=self.cfg.get("timeout", 600),
+                   timeout=self.cfg.get("timeout", 900),
                    keep_alive=self.cfg.get("keep_alive", "5m"))
 
     def set_config(self, key: str, value) -> dict:
@@ -383,18 +383,22 @@ class Sara:
         """
         key = str(key).strip()
         allowed = {"provider", "base_url", "model", "api_key",
-                   "fallback_models", "max_steps", "verbose", "no_research"}
+                   "fallback_models", "max_steps", "verbose", "no_research",
+                   "timeout", "keep_alive"}
         if key not in allowed:
             return {"ok": False, "error": f"unknown setting '{key}'"}
         # normalise booleans / ints coming from strings
         if key in ("no_research", "verbose"):
             if isinstance(value, str):
                 value = value.strip().lower() in ("1", "true", "yes", "on")
-        elif key in ("max_steps",):
+        elif key in ("max_steps", "timeout"):
             try:
                 value = int(value)
             except (TypeError, ValueError):
-                return {"ok": False, "error": "max_steps must be an integer"}
+                return {"ok": False,
+                        "error": f"{key} must be an integer (seconds)"}
+        elif key in ("keep_alive",):
+            value = str(value).strip() or "5m"
         # provider preset pulls in the matching base_url unless user overrides
         if key == "provider":
             if value not in PROVIDERS:
@@ -411,7 +415,8 @@ class Sara:
         except OSError as e:
             return {"ok": False, "error": f"could not save config: {e}"}
         # re-sync anything derived from config
-        if key in ("base_url", "model", "api_key", "provider"):
+        if key in ("base_url", "model", "api_key", "provider", "timeout",
+                   "keep_alive"):
             self.llm = self._make_llm()
         return {"ok": True, "msg": f"{key} -> {value!r}",
                 "config": self.get_config()["config"]}

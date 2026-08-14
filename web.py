@@ -249,6 +249,8 @@ def ask(a: Ask):
         return _stream_factoryreset(msg)
     if msg.startswith("/model"):
         return _stream_model(msg)
+    if msg.startswith("/set "):
+        return _stream_set(msg)
 
     def run():
         with _lock:
@@ -487,6 +489,46 @@ def _stream_model(msg: str):
             else:
                 _sink.put({"type": "answer",
                            "text": "❌ " + res.get("error", "failed")})
+        except Exception as e:  # noqa: BLE001
+            _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            _sink.put({"type": "done"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            ev = _sink.get()
+            yield f"data: {json.dumps(ev)}\n\n"
+            if ev.get("type") == "done":
+                return
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+def _stream_set(msg: str):
+    """Run /set <key> <value> from the web chat, streaming the result as SSE."""
+    rest = msg[len("/set"):].strip()
+    parts = rest.split(None, 1)
+    if len(parts) != 2:
+        _sink.put({"type": "answer",
+                   "text": "❌ usage: /set <key> <value>  (e.g. /set timeout 1200)"})
+        _sink.put({"type": "done"})
+        return
+
+    def run():
+        try:
+            res = _sara.set_config(parts[0], parts[1])
+            if res.get("ok"):
+                _sink.put({"type": "result", "text": res.get("msg", "done"),
+                           "ok": True})
+                _sink.put({"type": "answer",
+                           "text": "✅ " + (res.get("msg") or "done")})
+            else:
+                _sink.put({"type": "answer",
+                           "text": "❌ " + (res.get("error") or "failed")})
         except Exception as e:  # noqa: BLE001
             _sink.put({"type": "error", "text": f"{type(e).__name__}: {e}"})
         finally:
