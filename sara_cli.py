@@ -62,6 +62,35 @@ def print_help() -> None:
 Anything else is sent to S.A.R.A as a question or task.""")
 
 
+COMMANDS = [
+    ("/help", "this message"),
+    ("/status", "model + memory state"),
+    ("/skills", "what she's taught herself"),
+    ("/facts", "durable facts she keeps"),
+    ("/model", "list / switch model"),
+    ("/set", "change a setting"),
+    ("/reset", "wipe memory (confirm)"),
+    ("/quit", "exit"),
+]
+
+
+def show_splash(agent: "Sara", console: Console) -> None:
+    st = agent.status()
+    up = getattr(agent, "_upgrade", None) or {}
+    console.splash(model=st["model"],
+                   skills=st.get("skills", 0),
+                   facts=st.get("facts", 0),
+                   online=st["online"],
+                   commands=COMMANDS,
+                   version=st.get("version", "unknown"),
+                   upgrade=up if up.get("available") else None)
+    if not st["online"]:
+        console.warn(f"the model at {agent.cfg['base_url']} isn't answering — "
+                     "start it with:  ollama serve")
+    if up.get("available"):
+        console.info("a newer version is available — type /upgrade to pull it")
+
+
 GPU_SERVER_URL = "http://127.0.0.1:8081/v1"
 
 
@@ -104,12 +133,7 @@ def main() -> None:
         return
 
     agent = Sara(console=console)
-    from sara import __version__
-    console.info(f"S.A.R.A v{__version__} — type /help or ask me anything.")
-    st = agent.status()
-    online = "online" if st["online"] else "offline"
-    console.info(f"brain: {st['model']} ({online})  |  "
-                 f"{st['skills']} skills, {st['facts']} facts")
+    show_splash(agent, console)
     setup_history()
 
     while True:

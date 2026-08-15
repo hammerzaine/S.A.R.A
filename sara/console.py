@@ -194,6 +194,75 @@ class Console:
                                 else l, GOLD if i == 0 else GREY))
         self._p()
 
+    def splash(self, model: str, skills: int, facts: int, online: bool,
+               commands: list[tuple[str, str]], version: str = "unknown",
+               upgrade: dict | None = None) -> None:
+        w = term_width()
+        inner = w - 4
+
+        def edge(l, r, colour=CYAN_D):
+            self._p(self._c(l + H * (w - 2) + r, colour))
+
+        def row(content: str = "", pad_colour=CYAN_D):
+            vis = visible_len(content)
+            body = content + " " * max(0, inner - vis)
+            self._p(self._c(V, pad_colour) + " " + body + " "
+                    + self._c(V, pad_colour))
+
+        self._p()
+        edge(TL, TR)
+        row()
+
+        # Wordmark
+        title = "S . A . R . A"
+        sub = "Smart AI Resource Assistant"
+        row(self._c(title.center(inner), CYAN + BOLD))
+        row(self._c(sub.center(inner), GREY))
+        row(self._c(self._c(f"v{version}", GREY_D).center(inner), GREY_D))
+        row()
+
+        # Status strip
+        dot = self._c("●", GREEN if online else RED)
+        state = self._c("online" if online else "offline",
+                        GREEN if online else RED)
+        status = (f"{dot} {state}   "
+                  + self._c("model ", GREY) + self._c(model, WHITE) + "   "
+                  + self._c("skills ", GREY) + self._c(str(skills), VIOLET)
+                  + "   " + self._c("memories ", GREY)
+                  + self._c(str(facts), VIOLET))
+        pad = max(0, (inner - visible_len(status)) // 2)
+        row(" " * pad + status)
+        row()
+
+        # Upgrade banner (inside the box, when one is available)
+        if upgrade and upgrade.get("available"):
+            latest = upgrade.get("latest")
+            tag = latest[:8] if isinstance(latest, str) and latest else ""
+            row(self._c("◆ UPGRADE AVAILABLE", AMBER + BOLD))
+            row(self._c(
+                f"  a newer version is available — type /upgrade to pull it"
+                f"{('  (' + tag + ')') if tag else ''}", AMBER + DIM))
+            row()
+
+        # Commands
+        row(self._c("COMMANDS", AMBER + BOLD))
+        row(self._c(H * (inner - 1), GREY_D))
+        col_w = inner // 2
+        pairs = [(c, d) for c, d in commands]
+        for i in range(0, len(pairs), 2):
+            chunk = pairs[i:i + 2]
+            line = ""
+            for cmd, desc in chunk:
+                room = col_w - 12
+                d = desc if len(desc) <= room else desc[:max(0, room - 1)] + "…"
+                cell = self._c(f"{cmd:<10}", CYAN) + self._c(d, GREY)
+                cell += " " * max(0, col_w - visible_len(cell))
+                line += cell
+            row(line)
+        row()
+        edge(BL, BR)
+        self._p()
+
     def model_menu(self, models: list[dict]) -> None:
         if not models:
             self.info("no models found on any endpoint")

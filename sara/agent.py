@@ -289,12 +289,19 @@ class Sara:
                            glob.glob(str(_P.home() / "models" / "*.gguf"))}
 
         # 1) active endpoint's /v1/models (OpenAI-compatible)
+        #    Note: Ollama's OpenAI shim returns "data", some servers return
+        #    "models" — accept both.
         try:
             import requests
             r = requests.get(f"{active_url}/models", timeout=5)
             if r.ok:
-                for m in r.json().get("models", []):
-                    mid = m.get("id") or m.get("name") or ""
+                payload = r.json()
+                listing = payload.get("data") or payload.get("models") or []
+                for m in listing:
+                    mid = (m.get("id") or m.get("name")
+                           or m.get("model") or "").strip()
+                    if not mid:
+                        continue
                     bn = _P(mid).name
                     # if this is a local GGUF served by the endpoint, merge
                     if bn in local_basenames:
@@ -304,17 +311,28 @@ class Sara:
         except Exception:
             pass
 
-        # 2) Ollama local registry
+        # 2) Ollama native registry — authoritative when Ollama is serving,
+        #    independent of the `ollama` CLI binary being on PATH.
         try:
-            import subprocess
-            out = subprocess.run(["ollama", "list"], capture_output=True,
-                                 text=True, timeout=15).stdout
-            for line in out.splitlines()[1:]:
-                cols = line.split()
-                if cols:
-                    add(cols[0], "ollama", PROVIDERS["ollama"])
+            import requests
+            r = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
+            if r.ok:
+                for m in r.json().get("models", []):
+                    add(m.get("name", ""), "ollama", PROVIDERS["ollama"])
         except Exception:
             pass
+        # 2b) fall back to the `ollama` CLI if the HTTP call failed
+        if not any(v["source"] == "ollama" for v in found.values()):
+            try:
+                import subprocess
+                out = subprocess.run(["ollama", "list"], capture_output=True,
+                                     text=True, timeout=15).stdout
+                for line in out.splitlines()[1:]:
+                    cols = line.split()
+                    if cols:
+                        add(cols[0], "ollama", PROVIDERS["ollama"])
+            except Exception:
+                pass
 
         # 3) local GGUF files
         for path in local_basenames.values():
