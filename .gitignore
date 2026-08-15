@@ -19,3 +19,6 @@ link.txt
 
 # demo site (not part of agent package)
 se-demo-site/
+
+# dev-only verification harness (not part of the agent)
+test_harness.py

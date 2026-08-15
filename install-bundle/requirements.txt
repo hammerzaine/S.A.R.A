@@ -5,3 +5,7 @@ fastapi>=0.100,<0.200
 uvicorn>=0.20,<0.60
 pydantic>=2.0,<3.0
 requests>=2.25,<3.0
+# ssh_run tool (S.A.R.A's SSH subsystem) — was previously undeclared, which
+# caused "No module named 'paramiko'" at runtime. Declared explicitly so the
+# install bundle is complete regardless of user-vs-system site resolution.
+paramiko>=2.0

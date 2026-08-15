@@ -1,4 +1,17 @@
-"""Brain — the LLM client and the reason → act → observe → learn loop."""
+"""Brain — the LLM client and the reason -> act -> observe -> learn loop.
+
+v4 rewrite. The v3 build used six separate regexes to tease a tool call out of
+the model's reply; that was fragile and a parse miss was invisible (the tool
+silently never ran and the model filled the gap with invention). v4 uses ONE
+tolerant parser that handles every form a small local model actually emits:
+
+    ACTION: name                 <- bare, arg on following lines
+    ```ACTION: name\n<arg>```      <- fenced, arg inside
+    ```ACTION: name <arg>```       <- fenced, arg inline
+    ACTION: name <arg>             <- inline, arg after the name
+
+Plus strip_control() so the user only ever sees prose.
+"""
 
 from __future__ import annotations
 
@@ -7,66 +20,126 @@ import re
 
 import requests
 
-TOOL_RE = re.compile(
-    r"(?:^|\n)\s*(?:ACTION|TOOL)\s*:\s*([a-z_]+)\s*\n```(?:[a-z]*\n)?(.*?)```",
-    re.S | re.I)
-# Some models put the whole thing inside the fence: ```action: list_dir\n<arg>```
-TOOL_FENCED_RE = re.compile(
-    r"```(?:[a-z]*\s*\n)?\s*(?:ACTION|TOOL)\s*:\s*([a-z_]+)\s*\n(.*?)```",
-    re.S | re.I)
-# ...and some put the ARG on the same line inside the fence:
-#   ```ACTION: list_dir /home/zaine```
-TOOL_FENCED_INLINE_RE = re.compile(
-    r"```(?:[a-z]*\s*\n)?\s*(?:ACTION|TOOL)\s*:\s*([a-z_]+)[ \t]+([^\n`]+)",
-    re.I)
-TOOL_INLINE_RE = re.compile(
-    r"(?:^|\n)\s*(?:ACTION|TOOL)\s*:\s*([a-z_]+)[ \t]+([^\n]+)", re.I)
-LEARN_RE = re.compile(
-    r"(?:^|\n)\s*LEARNED\s*:\s*([^\n]+)\n(.*?)(?=\nLEARNED:|\Z)", re.S | re.I)
-REMEMBER_RE = re.compile(r"(?:^|\n)\s*REMEMBER\s*:\s*([^\n]+)", re.I)
+# --- boundaries that end an action's argument block -------------------------
+_CTRL = r"(?:ACTION|TOOL|LEARNED|REMEMBER)\s*:"
+# A bare/inline ACTION header: colon then name, ending at a newline OR end.
+_HEAD = re.compile(
+    r"(?:^|\n)\s*(?:ACTION|TOOL)\s*:\s*([A-Za-z_][\w]*)", re.I)
+# A fenced ACTION header sitting inside a ``` fence (e.g. `` ```ACTION: name ``).
+_FENCE_HEAD = re.compile(
+    r"```\s*(?:ACTION|TOOL)\s*:\s*([A-Za-z_][\w]*)", re.I)
+
+
+def parse_action(text: str):
+    """Extract the FIRST tool call. Returns (name, arg) or None.
+
+    Robust to fenced / inline / bare forms and small-model quirks.
+    """
+    if not text:
+        return None
+    # Prefer a fenced header (```ACTION: name) — arg lives inside the fence.
+    m = _FENCE_HEAD.search(text)
+    if m:
+        name = m.group(1).lower()
+        after = text[m.end():].lstrip("\n")
+        body = after[3:] if after.startswith("```") else after
+        end = body.rfind("```")
+        if end != -1:
+            body = body[:end]
+        arg = body.strip("\n").strip("`").strip()
+        return (name, arg) if arg else None
+
+    # Bare header `ACTION: name` — arg may be on the SAME line (the form this
+    # fine-tune prefers: "ACTION: list_dir /home/zaine") or on following lines.
+    m = _HEAD.search(text)
+    if not m:
+        return None
+    name = m.group(1).lower()
+    # Capture the rest of the header line PLUS following lines until the next
+    # control block or end of text. This covers both inline and multiline args.
+    line_rest = text[m.end():]
+    # Split off the rest of the current line (inline arg) ...
+    parts = line_rest.split("\n", 1)
+    inline = parts[0].strip().strip("`").strip()
+    remainder = parts[1] if len(parts) > 1 else ""
+    # ... then take everything up to the next control block.
+    cut = re.search(r"\n\s*" + _CTRL, remainder, re.I)
+    if cut:
+        remainder = remainder[:cut.start()]
+    remainder = remainder.strip("\n").strip("`").strip()
+    arg = (inline + "\n" + remainder).strip() if remainder else inline
+    arg = arg.strip()
+    if not arg:
+        return None
+    return name, arg
+
+
+def strip_control(text: str) -> str:
+    """Remove ACTION/LEARNED/REMEMBER blocks so the user sees only prose."""
+    if not text:
+        return ""
+    # 1) drop fenced code blocks (action arguments live here)
+    text = re.sub(r"```.*?```", "", text, flags=re.S)
+    # 2) drop control blocks: a header line plus any following non-blank
+    #    lines up to the first blank line (the argument), keeping any prose
+    #    that follows. Small models sometimes append a stray line after an
+    #    action; we must not leak the control block into the reply.
+    ctrl = re.compile(r"^\s*(?:ACTION|TOOL|LEARNED|REMEMBER)\s*:", re.I)
+    lines = text.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        if ctrl.match(lines[i]):
+            i += 1
+            while i < len(lines) and lines[i].strip() and not ctrl.match(
+                    lines[i]):
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    text = "\n".join(out)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 class LLM:
     """Talks to an OpenAI-compatible endpoint (Ollama by default)."""
 
     def __init__(self, base_url: str, model: str, api_key: str | None = None,
-                 timeout: int = 1800, keep_alive: str = "-1"):
+                 timeout: int = 1800, keep_alive: str = "5m",
+                 max_tokens: int = 2048):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
-        # read timeout: how long to wait for a (possibly cold-loading) response
-        # body. A remote Ollama host can take minutes to page a multi-GB model
-        # in over a slow link, so this is deliberately generous and tunable
-        # via the 'timeout' config key. The connect timeout stays short (dead
-        # host fails fast instead of hanging for the full read budget).
+        # read timeout: a cold-loading remote/slow model can take minutes.
         self.timeout = timeout
-        # how long Ollama keeps the model loaded after a request. "5m" avoids
-        # reloading the multi-GB weights on every turn over a slow LAN.
+        # keep_alive: pin the model in VRAM between turns.
         self.keep_alive = keep_alive
+        # max_tokens: hard cap on generation. Small fine-tunes can ignore the
+        # "stop after ACTION" instruction and ramble for 10k+ tokens; this
+        # bounds a single turn so the agent loop stays responsive.
+        self.max_tokens = max_tokens
 
     def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        # keep_alive: pin the model in VRAM between turns so a remote Ollama
-        # host doesn't reload the (multi-GB) weights on every request — cold
-        # loads over the LAN can exceed the read timeout.
-        payload = {"model": self.model, "messages": messages,
-                   "temperature": temperature, "stream": True,
-                   "keep_alive": self.keep_alive}
-
-        # (connect, read) tuple: connect fails fast on a dead host; read is the
-        # generous, tunable cold-load budget.
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+            "keep_alive": self.keep_alive,
+            "max_tokens": self.max_tokens,
+        }
         req_timeout = (15, self.timeout)
         try:
-            # stream=True: tokens arrive as they're produced, so the connection
-            # never goes idle and a slow cold-load can't trip read-timeout.
             with requests.post(f"{self.base_url}/chat/completions",
                                json=payload, headers=headers,
                                timeout=req_timeout, stream=True) as r:
                 if r.status_code != 200:
-                    raise RuntimeError(f"model returned HTTP {r.status_code}: "
-                                       f"{r.text[:200]}")
+                    raise RuntimeError(
+                        f"model returned HTTP {r.status_code}: {r.text[:200]}")
                 content = []
                 for line in r.iter_lines(decode_unicode=True):
                     if not line:
@@ -89,19 +162,16 @@ class LLM:
         except requests.exceptions.ConnectTimeout as e:
             raise TimeoutError(
                 f"can't connect to the model at {self.base_url} within 15s — "
-                f"is the host up and reachable?"
-            ) from e
+                f"is the host up and reachable?") from e
         except requests.exceptions.ConnectionError as e:
             raise ConnectionError(
-                f"can't reach the model at {self.base_url} — is it running?"
-            ) from e
+                f"can't reach the model at {self.base_url} — is it running?") \
+                from e
         except requests.exceptions.ReadTimeout as e:
             raise TimeoutError(
                 f"model at {self.base_url} took too long to respond "
-                f"(>{self.timeout}s). If it's a remote Ollama host, the model "
-                f"may be cold-loading — try again, or raise 'timeout' "
-                f"(/set timeout <seconds>)."
-            ) from e
+                f"(>{self.timeout}s). If it's cold-loading, try again or "
+                f"raise 'timeout'.") from e
 
     def available(self) -> bool:
         try:
@@ -110,85 +180,14 @@ class LLM:
         except Exception:
             return False
 
-
-def parse_action(text: str):
-    """Extract the FIRST tool call. Returns (name, arg) or None.
-
-    Accepts both fenced and inline forms because small models are inconsistent
-    about which they emit. Also accepts the UNFENCED `ACTION: name` followed by
-    a newline and the argument (the canonical form shown in PROTOCOL) — some
-    models emit exactly that and must not be dropped to None.
-    """
-    # FENCED multi-line:  ACTION: name\n```<arg>```
-    m = TOOL_RE.search(text)
-    if m:
-        return m.group(1).strip().lower(), m.group(2).strip()
-    # FENCED, action inside the fence
-    m = TOOL_FENCED_RE.search(text)
-    if m:
-        return m.group(1).strip().lower(), m.group(2).strip()
-    # FENCED with arg on same line inside fence:  ```ACTION: name <arg>```
-    m = TOOL_FENCED_INLINE_RE.search(text)
-    if m:
-        return m.group(1).strip().lower(), m.group(2).strip().strip("`")
-    # UNFENCED:  ACTION: name <first-line>\n<arg continues on following lines>
-    # This is the most common small-model form for write_file etc. where the
-    # path is on the ACTION line and the content streams on the next lines.
-    m = re.search(
-        r"(?:^|\n)\s*(?:ACTION|TOOL)\s*:\s*([a-z_]+)[ \t]+([^\n]+)\n(.*?)(?=\n(?:ACTION|TOOL|LEARNED|REMEMBER)\s*:|\Z)",
-        text, re.S | re.I)
-    if m:
-        name = m.group(1).strip().lower()
-        first = m.group(2).strip().strip("`")
-        rest = m.group(3).strip("\n")
-        arg = (first + "\n" + rest).strip() if rest else first
-        if arg:
-            return name, arg
-    # UNFENCED, no trailing content (arg entirely on the ACTION line)
-    m = re.search(r"(?:^|\n)\s*(?:ACTION|TOOL)\s*:\s*([a-z_]+)[ \t]+([^\n]+)",
-                  text, re.I)
-    if m:
-        arg = m.group(2).strip().strip("`")
-        if arg and not arg.lower().startswith("```"):
-            return m.group(1).strip().lower(), arg
-    # INLINE (single-line, no continuation):  ACTION: name <arg>
-    m = TOOL_INLINE_RE.search(text)
-    if m:
-        arg = m.group(2).strip().strip("`")
-        if arg:
-            return m.group(1).strip().lower(), arg
-    # UNFENCED multi-line arg only (canonical PROTOCOL form, no inline path)
-    m = re.search(r"(?:^|\n)\s*(?:ACTION|TOOL)\s*:\s*([a-z_]+)\s*\n(.*?)(?=\n(?:ACTION|TOOL|LEARNED|REMEMBER)\s*:|\Z)",
-                  text, re.S | re.I)
-    if m:
-        name, arg = m.group(1).strip().lower(), m.group(2).strip()
-        if arg:
-            return name, arg
-    return None
-
-
-def parse_learnings(text: str) -> list[tuple[str, str]]:
-    out = []
-    for m in LEARN_RE.finditer(text):
-        title = m.group(1).strip()
-        body = m.group(2).strip()
-        if title and body:
-            out.append((title, body))
-    return out
-
-
-def parse_memories(text: str) -> list[str]:
-    return [m.group(1).strip() for m in REMEMBER_RE.finditer(text)
-            if m.group(1).strip()]
-
-
-def strip_control(text: str) -> str:
-    """Remove ACTION/LEARNED/REMEMBER blocks so the user sees only prose."""
-    text = TOOL_RE.sub("", text)
-    text = TOOL_FENCED_RE.sub("", text)
-    text = TOOL_FENCED_INLINE_RE.sub("", text)
-    text = TOOL_INLINE_RE.sub("", text)
-    text = LEARN_RE.sub("", text)
-    text = REMEMBER_RE.sub("", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    def keep_hot(self) -> bool:
+        """Pin the model in VRAM so it never cold-loads mid-session."""
+        import requests as _r
+        try:
+            _r.post(f"{self.base_url}/api/generate",
+                    json={"model": self.model, "keep_alive": self.keep_alive,
+                          "prompt": " ", "stream": False},
+                    timeout=(15, int(self.timeout)))
+            return True
+        except Exception:
+            return False

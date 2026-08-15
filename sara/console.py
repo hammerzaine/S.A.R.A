@@ -1,7 +1,7 @@
 """Console — S.A.R.A's visible inner life and all screen furniture.
 
-Everything printed goes through here. Each *kind* of information owns a colour
-and a glyph, consistently, so the user can parse a transcript at a glance:
+Everything printed goes through here. Each kind of information owns a colour
+and a glyph, consistently:
 
     cyan      S.A.R.A speaking (her actual answer)
     blue      you
@@ -37,7 +37,6 @@ VIOLET = "\033[38;5;141m"
 GOLD = "\033[38;5;179m"
 WHITE = "\033[38;5;255m"
 
-# Box drawing
 TL, TR, BL, BR = "╭", "╮", "╰", "╯"
 H, V = "─", "│"
 
@@ -47,7 +46,6 @@ def term_width() -> int:
 
 
 def visible_len(s: str) -> int:
-    """Length ignoring ANSI escapes."""
     out, i = 0, 0
     while i < len(s):
         if s[i] == "\033":
@@ -67,7 +65,6 @@ class Console:
             "TERM", "") not in ("dumb", "")
         self._step = 0
 
-    # -- primitives --------------------------------------------------------
     def _c(self, text, colour) -> str:
         return f"{colour}{text}{RESET}" if self.colour else str(text)
 
@@ -83,106 +80,6 @@ class Console:
             lines.extend(textwrap.wrap(para, width=width) or [""])
         return [indent + l for l in lines]
 
-    # -- splash ------------------------------------------------------------
-    def splash(self, model: str, skills: list[dict], facts: int,
-               online: bool, commands: list[tuple[str, str]],
-               version: str = "unknown",
-               upgrade: dict | None = None) -> None:
-        w = term_width()
-        inner = w - 4
-
-        def edge(l, r, colour=CYAN_D):
-            self._p(self._c(l + H * (w - 2) + r, colour))
-
-        def row(content: str = "", pad_colour=CYAN_D):
-            vis = visible_len(content)
-            body = content + " " * max(0, inner - vis)
-            self._p(self._c(V, pad_colour) + " " + body + " "
-                    + self._c(V, pad_colour))
-
-        self._p()
-        edge(TL, TR)
-        row()
-
-        # Wordmark
-        title = "S . A . R . A"
-        sub = "Smart AI Resource Assistant"
-        row(self._c(title.center(inner), CYAN + BOLD))
-        row(self._c(sub.center(inner), GREY))
-        row(self._c(self._c(f"v{version}", GREY_D).center(inner), GREY_D))
-        row()
-
-        # Status strip
-        dot = self._c("●", GREEN if online else RED)
-        state = self._c("online" if online else "offline",
-                        GREEN if online else RED)
-        status = (f"{dot} {state}   "
-                  + self._c("model ", GREY) + self._c(model, WHITE) + "   "
-                  + self._c("skills ", GREY) + self._c(str(len(skills)), VIOLET)
-                  + "   " + self._c("memories ", GREY)
-                  + self._c(str(facts), VIOLET))
-        pad = max(0, (inner - visible_len(status)) // 2)
-        row(" " * pad + status)
-        row()
-
-        # Upgrade banner (inside the box, when one is available)
-        if upgrade and upgrade.get("available"):
-            latest = upgrade.get("latest")
-            tag = latest[:8] if isinstance(latest, str) and latest else ""
-            row(self._c("◆ UPGRADE AVAILABLE", AMBER + BOLD))
-            row(self._c(
-                f"  a newer version is available — type /upgrade to pull it"
-                f"{('  (' + tag + ')') if tag else ''}", AMBER + DIM))
-            row()
-
-        # Commands
-        row(self._c("COMMANDS", AMBER + BOLD))
-        row(self._c(H * (inner - 1), GREY_D))
-        col_w = inner // 2
-        pairs = [(c, d) for c, d in commands]
-        for i in range(0, len(pairs), 2):
-            chunk = pairs[i:i + 2]
-            line = ""
-            for cmd, desc in chunk:
-                # Truncate so two columns can never collide on a narrow term.
-                room = col_w - 12
-                d = desc if len(desc) <= room else desc[:max(0, room - 1)] + "…"
-                cell = self._c(f"{cmd:<10}", CYAN) + self._c(d, GREY)
-                cell += " " * max(0, col_w - visible_len(cell))
-                line += cell
-            row(line)
-        row()
-
-        # Skills
-        row(self._c("SKILLS SHE HAS TAUGHT HERSELF", VIOLET + BOLD))
-        row(self._c(H * (inner - 1), GREY_D))
-        if not skills:
-            row(self._c("nothing yet — give her a problem and watch",
-                        GREY + ITALIC))
-        else:
-            for s in skills[:10]:
-                name = s["name"][:26]
-                uses = s.get("uses", 0)
-                desc = (s.get("description") or "").strip()
-                if desc.lower() == name.lower():
-                    desc = ""
-                badge = self._c(f"{uses}×", GOLD if uses else GREY_D)
-                left = self._c(f"  {name:<26}", VIOLET)
-                room = inner - visible_len(left) - 6
-                cell = left + self._c(desc[:room], GREY)
-                cell += " " * max(0, inner - visible_len(cell)
-                                  - visible_len(badge))
-                row(cell + badge)
-            extra = len(skills) - 10
-            if extra > 0:
-                row(self._c(f"  +{extra} more skill"
-                            f"{'s' if extra != 1 else ''} — /skills to see "
-                            f"them all", GOLD + ITALIC))
-        row()
-        edge(BL, BR)
-        self._p()
-
-    # -- conversation ------------------------------------------------------
     def user_echo(self, text: str) -> None:
         w = term_width()
         self._p()
@@ -200,7 +97,6 @@ class Console:
             if not line.strip():
                 self._p()
                 continue
-            # Ground-truth data blocks are indented — colour them gold.
             if line.startswith("  ") and not line.startswith("   "):
                 self._p(self._c("  " + line, GOLD))
             elif line.startswith("Contents of ") or line.endswith("match(es):"):
@@ -210,11 +106,9 @@ class Console:
                     self._p(self._c(l, CYAN))
         self._p()
 
-    # -- process -----------------------------------------------------------
     def think(self, text: str) -> None:
         if not self.verbose:
             return
-        # Never surface code-fence noise or empty scaffolding as "reasoning".
         cleaned = str(text).replace("```", "").strip(" \n\t`")
         if len(cleaned) < 3:
             return
@@ -252,7 +146,11 @@ class Console:
         self._p(self._c(f"  {text}", GREY))
 
     def rule(self, label: str = "") -> None:
-        w = term_width()
+        w = 0
+        try:
+            w = term_width()
+        except Exception:
+            w = 80
         if label:
             self._p()
             self._p(self._c(f"  {label} ", VIOLET + BOLD)
@@ -260,7 +158,6 @@ class Console:
         else:
             self._p(self._c("  " + H * (w - 4), GREY_D))
 
-    # -- skills listing ----------------------------------------------------
     def skill_table(self, skills: list[dict]) -> None:
         if not skills:
             self.info("nothing self-taught yet — give her a problem")
@@ -288,8 +185,8 @@ class Console:
         if not facts:
             self.info("no durable facts yet")
             return
-        self.rule(f"{len(facts)} thing{'s' if len(facts) != 1 else ''} "
-                  f"she remembers")
+        self.rule(f"{len(facts)} thing{'s' if len(facts) != 1 else ''}"
+                  f" she remembers")
         self._p()
         for f in facts:
             for i, l in enumerate(self._wrap(f, term_width() - 8, "     ")):
@@ -297,10 +194,33 @@ class Console:
                                 else l, GOLD if i == 0 else GREY))
         self._p()
 
+    def model_menu(self, models: list[dict]) -> None:
+        if not models:
+            self.info("no models found on any endpoint")
+            return
+        w = term_width()
+        self.rule(f"{len(models)} available models")
+        self._p()
+        for i, m in enumerate(models, 1):
+            name = m["name"]
+            src = m["source"]
+            if m.get("active"):
+                head = self._c(f"  {i:>2}. {name}", GOLD + BOLD)
+                src_colour = GOLD
+            else:
+                head = self._c(f"  {i:>2}. {name}", WHITE)
+                src_colour = GREY_D
+            badge = self._c(src, src_colour)
+            # dot-fill between name and source, like skill_table
+            fill = " " + "·" * max(1, w - visible_len(head)
+                                    - visible_len(badge) - 5) + " "
+            self._p(head + self._c(fill, GREY_D) + badge)
+        self._p()
+        self.info(f"switch: /model <n>  (or /model <name> — "
+                  f"'{self._c('local', GREY_D)}' = ~/models/*.gguf via GPU server)")
+        self._p()
+
     def prompt(self) -> str:
-        # \001..\002 tell readline "these bytes are invisible". Without them
-        # readline miscounts the prompt width and the line smears when you
-        # arrow back through history or edit a long command.
         if not self.colour:
             return "\n  you > "
         return (f"\n  \001{BLUE}{BOLD}\002you\001{RESET}\002 "
