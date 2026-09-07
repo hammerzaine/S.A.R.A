@@ -1,6 +1,7 @@
 -- factory_guage.lua
 -- CC:Tweaked script — acts like Create Factory Gauge
 --
+-- Version: 2026-09-07-v2 (monitor auto-detection merged)
 -- ENVIRONMENT:
 --   - peripheral.find(side) — available
 --   - term API — available
