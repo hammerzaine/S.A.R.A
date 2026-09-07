@@ -84,15 +84,24 @@ else
 end
 
 -- Helper: write to term if available, else stdout.
--- In CC:T, term.write() does NOT auto-flush — we flush explicitly.
+-- CC:T term.write() auto-flushes; we guard flush() calls in case the API
+-- doesn't expose it (older CC:T builds lack term.flush).
+local function termFlush()
+  if _G.term.flush then
+    _G.term.flush()
+  end
+end
+
 local function output(str)
   str = str or ""
   if has_term and has_term_write then
     _G.term.write(str)
-    _G.term.flush()
+    termFlush()
   else
-    io.stdout:write(str)
-    io.stdout:flush()
+    if _G.io and io.stdout then
+      io.stdout:write(str)
+      io.stdout:flush()
+    end
   end
 end
 
@@ -100,10 +109,12 @@ local function outputln(str)
   str = str or ""
   if has_term and has_term_write then
     _G.term.write(str .. "\n")
-    _G.term.flush()
+    termFlush()
   else
-    io.stdout:write(str .. "\n")
-    io.stdout:flush()
+    if _G.io and io.stdout then
+      io.stdout:write(str .. "\n")
+      io.stdout:flush()
+    end
   end
 end
 
@@ -117,7 +128,8 @@ local function readln()
 
   -- Otherwise build a line from character events.
   local t = {}
-  io.stdout:flush()
+  local stdout = (_G.io and io.stdout) and io.stdout or nil
+  if stdout then stdout:flush() end
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
@@ -127,13 +139,23 @@ local function readln()
       elseif c == "\b" or c == "\127" then
         if #t > 0 then
           table.remove(t)
-          io.stdout:write("\b \b")
-          io.stdout:flush()
+          if stdout then
+            stdout:write("\b \b")
+            stdout:flush()
+          else
+            _G.term.write("\b \b")
+            termFlush()
+          end
         end
       elseif type(c) == "string" and #c > 0 then
         t[#t + 1] = c
-        io.stdout:write(c)
-        io.stdout:flush()
+        if stdout then
+          stdout:write(c)
+          stdout:flush()
+        else
+          _G.term.write(c)
+          termFlush()
+        end
       end
     elseif evt == "clipboard" then
       local text = data
@@ -155,20 +177,29 @@ local function readln()
       elseif key == keys.backspace then
         if #t > 0 then
           table.remove(t)
-          io.stdout:write("\b \b")
-          io.stdout:flush()
+          if stdout then
+            stdout:write("\b \b")
+            stdout:flush()
+          else
+            _G.term.write("\b \b")
+            termFlush()
+          end
         end
       end
     end
   end
-  io.stdout:write("\n")
-  io.stdout:flush()
-  return table.concat(t)
-end
-
-local function readkey()
-  local evt, key = os.pullEvent("key")
-  return key
+  if stdout then
+    stdout:write("\n")
+    stdout:flush()
+  else
+    _G.term.write("\n")
+    termFlush()
+  end
+  local line = table.concat(t)
+  if line == "" then
+    return nil
+  end
+  return line
 end
 
 -- ---------------------------------------------------------------------------
