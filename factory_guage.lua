@@ -150,7 +150,7 @@ local function readln()
       end
     elseif evt == "key" then
       local key = data
-      if key == keys.enter or key == keys.return then
+      if key == keys.enter then
         break
       elseif key == keys.backspace then
         if #t > 0 then
