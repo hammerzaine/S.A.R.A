@@ -1,20 +1,20 @@
 -- factory_guage.lua
 -- CC:Tweaked script — acts like Create Factory Gauge
 --
--- ENVIRONMENT: What we know works:
+-- ENVIRONMENT:
 --   - peripheral.find(side) — available
---   - term API — available (for monitor drawing)
+--   - term API — available
 --   - colors API — available
---   - io — available (stdin/stdout)
---   - No require() — everything is global or builtin
---   - No component/computer/shell globals
+--   - io — available (stdin/stdout for text input)
+--   - monitor — auto-detected at startup; menu renders on it if found
 --
 -- HOW IT WORKS:
 --   1. Scans all 6 sides using peripheral.find
---   2. Looks for a written book in an item frame (clipboard)
---   3. Reads Frog Port names from the book (one per line)
---   4. Falls back to manual entry if no book found
---   5. User selects recipes, checks stock, triggers craft
+--   2. Auto-detects a monitor peripheral and renders the menu on it
+--   3. Looks for a written book in an item frame (clipboard)
+--   4. Reads Frog Port names from the book (one per line)
+--   5. Falls back to manual entry via terminal if no book found
+--   6. User selects recipes, checks stock, triggers craft
 --
 -- CONTROLS:
 --   Q / Esc     — quit
@@ -25,112 +25,137 @@
 
 print("factory_guage: starting...")
 
--- Detect environment
-local has_peripheral_find = false
-local has_term = false
-local has_term_write = false
-local has_term_clear = false
-local has_term_setCursorPos = false
-local has_term_getCursorPos = false
-local has_term_isVisible = false
-local has_term_scroll = false
-local has_term_setTextColor = false
-local has_term_read = false
-local has_colors = false
+-- ---------------------------------------------------------------------------
+-- ENVIRONMENT DETECTION
+-- ---------------------------------------------------------------------------
 
-if _G.peripheral and type(_G.peripheral) == "table" then
-  if _G.peripheral.find and type(_G.peripheral.find) == "function" then
-    has_peripheral_find = true
-    print("[diag] peripheral.find: AVAILABLE")
-  end
+local function hasFn(tbl, name)
+  return tbl and type(tbl[name]) == "function"
 end
 
-if _G.term and type(_G.term) == "table" then
-  has_term = true
-  print("[diag] term: AVAILABLE")
-  if _G.term.write and type(_G.term.write) == "function" then
-    has_term_write = true
-  end
-  if _G.term.clear and type(_G.term.clear) == "function" then
-    has_term_clear = true
-  end
-  if _G.term.setCursorPos and type(_G.term.setCursorPos) == "function" then
-    has_term_setCursorPos = true
-  end
-  if _G.term.getCursorPos and type(_G.term.getCursorPos) == "function" then
-    has_term_getCursorPos = true
-  end
-  if _G.term.isVisible and type(_G.term.isVisible) == "function" then
-    has_term_isVisible = true
-  end
-  if _G.term.scroll and type(_G.term.scroll) == "function" then
-    has_term_scroll = true
-  end
-  if _G.term.setTextColor and type(_G.term.setTextColor) == "function" then
-    has_term_setTextColor = true
-  end
-  if _G.term.read and type(_G.term.read) == "function" then
-    has_term_read = true
+local has_peripheral_find = _G.peripheral and hasFn(_G.peripheral, "find")
+local has_term = _G.term and type(_G.term) == "table"
+local has_term_write    = has_term and hasFn(_G.term, "write")
+local has_term_clear    = has_term and hasFn(_G.term, "clear")
+local has_term_setCursorPos = has_term and hasFn(_G.term, "setCursorPos")
+local has_term_getCursorPos = has_term and hasFn(_G.term, "getCursorPos")
+local has_term_setTextColor = has_term and hasFn(_G.term, "setTextColor")
+local has_term_read     = has_term and hasFn(_G.term, "read")
+local has_term_flush    = has_term and hasFn(_G.term, "flush")
+local has_colors        = _G.colors and type(_G.colors) == "table"
+local has_io            = _G.io and type(_G.io.read) == "function"
+
+if has_peripheral_find then print("[diag] peripheral.find: AVAILABLE") end
+if has_term then print("[diag] term: AVAILABLE") end
+if has_colors then print("[diag] colors: AVAILABLE") end
+if has_io then print("[diag] io.read: AVAILABLE") end
+
+-- ---------------------------------------------------------------------------
+-- MONITOR AUTO-DETECTION
+-- ---------------------------------------------------------------------------
+
+local monitor = nil
+local onMonitor = false
+
+if has_peripheral_find then
+  monitor = _G.peripheral.find("monitor")
+  if monitor then
+    onMonitor = true
+    print("[diag] monitor: DETECTED")
+  else
+    print("[diag] monitor: NOT FOUND — using terminal")
   end
 else
-  print("[diag] term: ABSENT")
+  print("[diag] monitor: peripheral.find unavailable")
 end
 
-if _G.colors and type(_G.colors) == "table" then
-  has_colors = true
-  print("[diag] colors: AVAILABLE")
-else
-  print("[diag] colors: ABSENT")
-end
+-- ---------------------------------------------------------------------------
+-- OUTPUT HELPERS — work on monitor when available, term when not
+-- ---------------------------------------------------------------------------
 
--- Helper: write to term if available, else stdout.
--- CC:T term.write() auto-flushes in most builds; we guard flush()
--- in case the API doesn't expose it (older CC:T builds lack term.flush).
 local function termFlush()
-  if _G.term and _G.term.flush then
-    _G.term.flush()
-  end
+  if has_term_flush then _G.term.flush() end
 end
 
-local function output(str)
-  str = str or ""
-  if has_term and has_term_write then
-    _G.term.write(str)
+-- Write to the active display (monitor or term).
+local function dispWrite(text)
+  if onMonitor and monitor then
+    monitor.write(text)
+  elseif has_term and has_term_write then
+    _G.term.write(text)
     termFlush()
-  else
-    if _G.io and io.stdout then
-      io.stdout:write(str)
-      io.stdout:flush()
-    end
+  elseif has_io and io.stdout then
+    io.stdout:write(text)
+    io.stdout:flush()
   end
 end
 
-local function outputln(str)
-  str = str or ""
-  if has_term and has_term_write then
-    _G.term.write(str .. "\n")
-    termFlush()
-  else
-    if _G.io and io.stdout then
-      io.stdout:write(str .. "\n")
-      io.stdout:flush()
-    end
+-- Write a line to the active display.
+local function dispWriteLn(text)
+  dispWrite(text .. "\n")
+end
+
+-- Clear the active display.
+local function dispClear()
+  if onMonitor and monitor and hasFn(monitor, "clear") then
+    monitor.clear()
+  elseif has_term and has_term_clear then
+    _G.term.clear()
   end
 end
 
--- Read a line from the user.
--- CC:T terminal GUI provides line input via io.read("*l").
--- We use that as the primary path (it works in the in-game terminal),
--- with a fallback for environments where io isn't available.
+-- Set cursor position on the active display.
+local function dispSetCursorPos(x, y)
+  if onMonitor and monitor and hasFn(monitor, "setCursorPos") then
+    monitor.setCursorPos(x, y)
+  elseif has_term and has_term_setCursorPos then
+    _G.term.setCursorPos(x, y)
+  end
+end
+
+-- Set text colour on the active display.
+local function dispSetTextColor(c)
+  if onMonitor and monitor and hasFn(monitor, "setTextColor") then
+    monitor.setTextColor(c)
+  elseif has_term and has_term_setTextColor then
+    _G.term.setTextColor(c)
+  end
+end
+
+-- Set background colour on the active display.
+local function dispSetBackgroundColor(c)
+  if onMonitor and monitor and hasFn(monitor, "setBackgroundColor") then
+    monitor.setBackgroundColor(c)
+  elseif has_term and hasFn(_G.term, "setBackgroundColor") then
+    _G.term.setBackgroundColor(c)
+  end
+end
+
+-- Get display size.
+local function dispGetSize()
+  if onMonitor and monitor and hasFn(monitor, "getSize") then
+    return monitor.getSize()
+  elseif has_term and has_term_getCursorPos then
+    -- term.getSize() returns w, h; fall back to known terminal size
+    local ok, w, h = pcall(function() return _G.term.getSize() end)
+    if ok then return w, h end
+    return 51, 19  -- default CC:T terminal
+  end
+  return 51, 19
+end
+
+-- ---------------------------------------------------------------------------
+-- TEXT INPUT — always via terminal (io.read works reliably in CC:T GUI)
+-- ---------------------------------------------------------------------------
+
 local function readln()
-  if _G.io and type(_G.io.read) == "function" then
+  -- CC:T terminal GUI provides line input via io.read("*l").
+  if has_io then
     local line = _G.io.read("*l")
     return line
   end
-  -- Fallback: build line from key events (for environments without io.read)
+  -- Fallback: build line from key events.
   local t = {}
-  local stdout = (_G.io and io.stdout) and io.stdout or nil
-  if stdout then stdout:flush() end
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
@@ -138,55 +163,21 @@ local function readln()
       if c == "\n" or c == "\r" then
         break
       elseif c == "\b" or c == "\127" then
-        if #t > 0 then
-          table.remove(t)
-          if stdout then
-            stdout:write("\b \b")
-            stdout:flush()
-          else
-            _G.term.write("\b \b")
-            termFlush()
-          end
-        end
+        if #t > 0 then table.remove(t) end
       elseif type(c) == "string" and #c > 0 then
         t[#t + 1] = c
-        if stdout then
-          stdout:write(c)
-          stdout:flush()
-        else
-          _G.term.write(c)
-          termFlush()
-        end
       end
     elseif evt == "key" then
       local key = data
       if key == keys.enter then
         break
       elseif key == keys.backspace then
-        if #t > 0 then
-          table.remove(t)
-          if stdout then
-            stdout:write("\b \b")
-            stdout:flush()
-          else
-            _G.term.write("\b \b")
-            termFlush()
-          end
-        end
+        if #t > 0 then table.remove(t) end
       end
     end
   end
-  if stdout then
-    stdout:write("\n")
-    stdout:flush()
-  else
-    _G.term.write("\n")
-    termFlush()
-  end
   local line = table.concat(t)
-  if line == "" then
-    return nil
-  end
+  if line == "" then return nil end
   return line
 end
 
@@ -198,6 +189,7 @@ end
 -- ---------------------------------------------------------------------------
 -- RECIPES — edit this table
 -- ---------------------------------------------------------------------------
+
 local recipes = {
   ["minecraft:stick"] = {
     output = "minecraft:stick",
@@ -225,6 +217,7 @@ local recipes = {
 -- ---------------------------------------------------------------------------
 -- STATE
 -- ---------------------------------------------------------------------------
+
 local clipboardEntries = {}
 local detectedPeripherals = {}
 local stockCache = {}
@@ -232,16 +225,12 @@ local clipboardSide = nil
 local selectedRecipe = nil
 
 -- ---------------------------------------------------------------------------
--- DETECTION
+-- PERIPHERAL DETECTION
 -- ---------------------------------------------------------------------------
 
 local function detectPeripheralType(side)
-  if not has_peripheral_find then
-    return nil, nil
-  end
-  local ok, comp = pcall(function()
-    return _G.peripheral.find(side)
-  end)
+  if not has_peripheral_find then return nil, nil end
+  local ok, comp = pcall(function() return _G.peripheral.find(side) end)
   if ok and comp and comp.type and comp.type ~= "none" then
     return comp.type, comp
   end
@@ -250,17 +239,12 @@ end
 
 local function scanAllSides()
   detectedPeripherals = {}
-
   local sides_to_scan = { "left", "right", "front", "back", "top", "bottom" }
-
   for _, sideName in ipairs(sides_to_scan) do
     local typ, comp = detectPeripheralType(sideName)
     if typ then
       detectedPeripherals[sideName] = {
-        side = sideName,
-        name = sideName,
-        type = typ,
-        comp = comp,
+        side = sideName, name = sideName, type = typ, comp = comp,
       }
     end
   end
@@ -273,14 +257,10 @@ end
 local function readSignText(p)
   local comp = p.comp
   if not comp then return nil end
-
   local text = nil
   local ok = pcall(function()
-    if comp.getSignText then
-      text = comp.getSignText()
-    elseif comp.get then
-      text = comp.get()
-    end
+    if comp.getSignText then text = comp.getSignText()
+    elseif comp.get then text = comp.get() end
   end)
   if ok and text and type(text) == "string" and #text > 0 then
     local lines = {}
@@ -298,37 +278,20 @@ end
 local function readBookFromFrame(p)
   local comp = p.comp
   if not comp then return nil end
-
-  -- Get item from frame
   local item = nil
   local ok = pcall(function()
-    if comp.getItem then
-      item = comp.getItem()
-    elseif comp.get then
-      item = comp.get()
-    end
+    if comp.getItem then item = comp.getItem()
+    elseif comp.get then item = comp.get() end
   end)
-  if not ok or not item then
-    return nil
-  end
-
-  -- Check if it's a written book
+  if not ok or not item then return nil end
   local id = item.id or item.name or item.displayName or ""
   if not string.find(string.lower(id or ""), "book") and
      not string.find(string.lower(id or ""), "written") then
     return nil
   end
-
-  -- Get text
   local text = item.text or item.displayText or ""
-  if #text == 0 and item.pages then
-    text = table.concat(item.pages, "\n")
-  end
-  if #text == 0 then
-    return nil
-  end
-
-  -- Parse lines
+  if #text == 0 and item.pages then text = table.concat(item.pages, "\n") end
+  if #text == 0 then return nil end
   local lines = {}
   for line in string.gmatch(text, "[^\r\n]+") do
     line = string.match(line, "^%s*(.-)%s*$")
@@ -336,15 +299,12 @@ local function readBookFromFrame(p)
       lines[#lines + 1] = line
     end
   end
-
   return #lines > 0 and lines or nil
 end
 
 local function findClipboard()
   for sideName, p in pairs(detectedPeripherals) do
     local typ = p.type or ""
-
-    -- Check sign
     if string.find(typ, "sign") then
       local signText = readSignText(p)
       if signText and #signText > 0 then
@@ -352,8 +312,6 @@ local function findClipboard()
         return signText
       end
     end
-
-    -- Check item frame with book
     if string.find(typ, "item_frame") then
       local bookLines = readBookFromFrame(p)
       if bookLines and #bookLines > 0 then
@@ -361,8 +319,6 @@ local function findClipboard()
         return bookLines
       end
     end
-
-    -- Check container with book
     if string.find(typ, "container") or string.find(typ, "chest") or
        string.find(typ, "barrel") or string.find(typ, "hopper") then
       local bookLines = readBookFromFrame(p)
@@ -372,43 +328,40 @@ local function findClipboard()
       end
     end
   end
-
   return nil
 end
 
 local function loadClipboard()
   clipboardEntries = {}
   clipboardSide = nil
-
   scanAllSides()
-
   local names = findClipboard()
-
   if names and #names > 0 then
     clipboardEntries = names
-    outputln("Clipboard found on " .. (clipboardSide or "?"))
-    outputln("Ports: " .. table.concat(clipboardEntries, ", "))
+    dispWriteLn("Clipboard found on " .. (clipboardSide or "?"))
+    dispWriteLn("Ports: " .. table.concat(clipboardEntries, ", "))
   else
-    outputln("No clipboard found.")
-    outputln("Enter Frog Port names, one per line. Press Enter on an empty line when done:")
+    dispWriteLn("No clipboard found.")
+    dispWriteLn("Enter Frog Port names, one per line.")
+    dispWriteLn("Press Enter on an empty line when done:")
     local entries = {}
     while true do
-      output("> ")
+      dispWrite("> ")
       local line = readln()
       if not line or line == "" then break end
       local trimmed = string.match(line, "^%s*(.-)%s*$")
-      if trimmed ~= "" then
-        entries[#entries + 1] = trimmed
-      end
+      if trimmed ~= "" then entries[#entries + 1] = trimmed end
     end
     if #entries > 0 then
       clipboardEntries = entries
-      outputln("Loaded " .. #entries .. " port(s).")
+      dispWriteLn("Loaded " .. #entries .. " port(s).")
     else
       clipboardEntries = { "smasher", "grinder", "smelter" }
-      outputln("Using defaults: smasher, grinder, smelter")
+      dispWriteLn("Using defaults: smasher, grinder, smelter")
     end
   end
+  -- Pause so user can read the message (on monitor this matters more)
+  sleep(2)
 end
 
 -- ---------------------------------------------------------------------------
@@ -416,18 +369,12 @@ end
 -- ---------------------------------------------------------------------------
 
 local function getStock(itemId)
-  if stockCache[itemId] then
-    return stockCache[itemId]
-  end
+  if stockCache[itemId] then return stockCache[itemId] end
   return 0
 end
 
 local function updateStockCache()
-  for k in pairs(stockCache) do
-    stockCache[k] = nil
-  end
-
-  -- Try to read stock from detected item services
+  for k in pairs(stockCache) do stockCache[k] = nil end
   for _, p in pairs(detectedPeripherals) do
     local typ = p.type or ""
     if string.find(typ, "item_service") or string.find(typ, "item_storage") or
@@ -435,23 +382,16 @@ local function updateStockCache()
       if p.comp then
         local items = nil
         local ok = pcall(function()
-          if p.comp.getItems then
-            items = p.comp.getItems()
-          elseif p.comp.getAllItems then
-            items = p.comp.getAllItems()
-          elseif p.comp.get then
-            items = { p.comp.get() }
-          end
+          if p.comp.getItems then items = p.comp.getItems()
+          elseif p.comp.getAllItems then items = p.comp.getAllItems()
+          elseif p.comp.get then items = { p.comp.get() } end
         end)
         if ok and items and type(items) == "table" and #items > 0 then
           for _, item in ipairs(items) do
             local id = item.id or item.name or ""
             local count = item.count or item.size or item.amount or 0
             if id ~= "" and count and count > 0 then
-              if not stockCache[id] then
-                stockCache[id] = 0
-              end
-              stockCache[id] = stockCache[id] + count
+              stockCache[id] = (stockCache[id] or 0) + count
             end
           end
         end
@@ -466,30 +406,19 @@ end
 
 local function buildCraftQueue(itemId, targetCount, depth)
   depth = depth or 0
-  if depth > 10 then
-    return nil, "dependency too deep"
-  end
-
+  if depth > 10 then return nil, "dependency too deep" end
   local current = getStock(itemId)
   local need = targetCount - current
-
-  if need <= 0 then
-    return {}, "in stock"
-  end
-
+  if need <= 0 then return {}, "in stock" end
   local queue = {}
-  local entry = { action = "craft", item = itemId, count = need }
-  table.insert(queue, 1, entry)
-
+  table.insert(queue, 1, { action = "craft", item = itemId, count = need })
   local recipe = recipes[itemId]
   if recipe then
     for i, ingId in ipairs(recipe.ingredients) do
       local ingCount = recipe.ingredientCounts[i] or 1
       local totalNeeded = ingCount * need
       local subQueue, err = buildCraftQueue(ingId, totalNeeded, depth + 1)
-      if err and err ~= "in stock" then
-        return nil, err
-      end
+      if err and err ~= "in stock" then return nil, err end
       if subQueue then
         for j = #subQueue, 1, -1 do
           table.insert(queue, 1, subQueue[j])
@@ -499,7 +428,6 @@ local function buildCraftQueue(itemId, targetCount, depth)
   else
     return nil, "missing recipe for " .. itemId
   end
-
   return queue, "ok"
 end
 
@@ -512,42 +440,28 @@ local function findPort(portName)
     return detectedPeripherals[portName]
   end
   for name, p in pairs(detectedPeripherals) do
-    if string.lower(name) == string.lower(portName) then
-      return p
-    end
+    if string.lower(name) == string.lower(portName) then return p end
   end
   for name, p in pairs(detectedPeripherals) do
-    if string.find(string.lower(name), string.lower(portName)) then
-      return p
-    end
+    if string.find(string.lower(name), string.lower(portName)) then return p end
   end
   return nil
 end
 
 local function executeCraftToPort(itemId, count, portName)
   local p = findPort(portName)
-  if not p then
-    return false, "port not found: " .. tostring(portName)
-  end
-
+  if not p then return false, "port not found: " .. tostring(portName) end
   local typ = p.type or ""
   if not string.find(typ, "item_service") and not string.find(typ, "item") then
     return false, "not an item service: " .. tostring(typ)
   end
-
-  if not p.comp then
-    return false, "no component object for port"
-  end
-
+  if not p.comp then return false, "no component object for port" end
   local pushed = false
   local pushMsg = ""
-
   local function tryPush(funcName)
     local ok, result = pcall(function()
       local fn = p.comp[funcName]
-      if fn then
-        return fn({ name = itemId, count = count })
-      end
+      if fn then return fn({ name = itemId, count = count }) end
       return nil
     end)
     if ok and result ~= false and result ~= nil then
@@ -557,7 +471,6 @@ local function executeCraftToPort(itemId, count, portName)
     end
     return false
   end
-
   if not tryPush("pushOut") then
     if not tryPush("offer") then
       if not tryPush("sell") then
@@ -572,47 +485,32 @@ local function executeCraftToPort(itemId, count, portName)
       end
     end
   end
-
   if pushed then
     return true, "deposited " .. count .. "x " .. itemId .. " to " .. portName .. " via " .. pushMsg
   end
-
   return false, "failed to deposit to " .. portName
 end
 
 -- ---------------------------------------------------------------------------
--- GUI
+-- GUI — renders on monitor when available, falls back to terminal
 -- ---------------------------------------------------------------------------
 
-local function clearScreen()
-  if has_term and has_term_clear then
-    _G.term.clear()
-  else
-    outputln("\27[2J\27[H")
-  end
-end
-
 local function drawHeader(title)
-  if not has_term then
-    outputln(string.rep("=", 60))
-    outputln(string.rep(" ", 20) .. title)
-    outputln(string.rep("=", 60))
-    return
-  end
-
-  local w = 60
+  local w, h = dispGetSize()
+  dispClear()
+  dispSetBackgroundColor(colors.black)
+  dispSetTextColor(colors.yellow)
   local titleLen = #title
   local pad = math.floor((w - titleLen) / 2)
   if pad < 0 then pad = 0 end
-
-  if has_term_clear then _G.term.clear() end
-  if has_term_setCursorPos then _G.term.setCursorPos(1, 1) end
-  output(string.rep("=", w))
-  outputln()
-  output(string.rep(" ", pad) .. title .. string.rep(" ", w - pad - titleLen))
-  outputln()
-  output(string.rep("=", w))
-  outputln()
+  dispSetCursorPos(1, 1)
+  dispWrite(string.rep("=", w))
+  dispWriteLn()
+  dispSetCursorPos(1, 2)
+  dispWrite(string.rep(" ", pad) .. title .. string.rep(" ", w - pad - titleLen))
+  dispWriteLn()
+  dispWrite(string.rep("=", w))
+  dispWriteLn("")
 end
 
 local function countTable(t)
@@ -622,170 +520,198 @@ local function countTable(t)
   return c
 end
 
-local function showMainMenu()
-  clearScreen()
+local function drawMenuItem(x, y, selected, text)
+  if selected then
+    dispSetTextColor(colors.white)
+    dispSetBackgroundColor(colors.blue)
+  else
+    dispSetTextColor(colors.gray)
+    dispSetBackgroundColor(colors.black)
+  end
+  dispSetCursorPos(x, y)
+  if selected then
+    dispWrite("> " .. text .. " ")
+  else
+    dispWrite("  " .. text .. " ")
+  end
+end
+
+local function drawMainMenu()
+  local w, h = dispGetSize()
   drawHeader("FACTORY GAUGE")
 
-  outputln("Detected peripherals: " .. countTable(detectedPeripherals))
+  -- Status line
+  dispSetTextColor(colors.white)
+  dispSetBackgroundColor(colors.black)
+  dispSetCursorPos(1, 3)
+  dispWrite("Peripherals: " .. countTable(detectedPeripherals) .. "  |  ")
 
+  -- Frog Ports
   local portNames = ""
   for i, name in ipairs(clipboardEntries) do
     if i > 1 then portNames = portNames .. ", " end
     portNames = portNames .. name
   end
   if portNames == "" then portNames = "(none)" end
-  outputln("Frog Ports: " .. portNames)
+  dispWrite("Frog Ports: " .. portNames)
 
-  outputln("Controls: 1-9=recipe  C=stock  T=trigger  R=rescan  Q=quit")
-  outputln("")
+  -- Controls hint
+  dispSetCursorPos(1, 4)
+  dispSetTextColor(colors.darkGray)
+  if onMonitor then
+    dispWrite("W/S or Up/Down: navigate  |  Enter: select  |  Q: quit  |  R: rescan  |  C: stock  |  T: craft")
+  else
+    dispWrite("1-9: recipe  |  C: stock  |  T: craft  |  R: rescan  |  Q: quit")
+  end
 
-  outputln("DETECTED BLOCKS:")
+  -- Detected blocks
+  dispSetCursorPos(1, 6)
+  dispSetTextColor(colors.white)
+  dispWriteLn("DETECTED BLOCKS:")
   local idx = 0
   for sideName, p in pairs(detectedPeripherals) do
     idx = idx + 1
     local typeStr = p.type and (p.type:gsub("create:", "")) or "unknown"
     local mark = (idx == selectedRecipe) and ">" or " "
-    outputln("  " .. mark .. "[" .. idx .. "] " .. sideName .. " - " .. typeStr)
+    dispSetCursorPos(2, 7 + idx - 1)
+    dispWrite(mark .. "[" .. idx .. "] " .. sideName .. " - " .. typeStr)
   end
 
-  outputln("")
-  outputln("RECIPES:")
+  -- Recipes
   local recipeList = {}
-  for id in pairs(recipes) do
-    recipeList[#recipeList + 1] = id
-  end
+  for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
   table.sort(recipeList)
 
+  dispSetCursorPos(1, 7 + math.min(#detectedPeripherals, 5) + 1)
+  dispSetTextColor(colors.white)
+  dispWriteLn("RECIPES:")
   for i, id in ipairs(recipeList) do
     local r = recipes[id]
     local short = string.match(id, "^%w+:(.+)$") or id
     local target = r.sendTo or "?"
-    if i <= 9 then
-      outputln("  " .. i .. ". " .. short .. " -> " .. target .. " (keep " .. r.count .. ")")
-    end
+    local sel = (i == selectedRecipe)
+    drawMenuItem(2, 8 + math.min(#detectedPeripherals, 5) + i,
+                 sel, i .. ". " .. short .. " -> " .. target .. " (keep " .. r.count .. ")")
   end
-
   if #recipeList == 0 then
-    outputln("  (no recipes defined)")
+    dispSetCursorPos(2, 8 + math.min(#detectedPeripherals, 5) + 1)
+    dispSetTextColor(colors.gray)
+    dispWrite("(no recipes defined)")
   end
 
-  outputln("")
-  outputln("Stock tracked: " .. countTable(stockCache) .. " item types")
+  -- Stock summary
+  local stockY = 8 + math.min(#detectedPeripherals, 5) + math.max(#recipeList, 1) + 2
+  dispSetCursorPos(1, stockY)
+  dispSetTextColor(colors.darkGray)
+  dispWrite("Stock tracked: " .. countTable(stockCache) .. " item types")
 end
 
-local function showStockScreen()
-  clearScreen()
+local function drawStockScreen()
   drawHeader("CURRENT STOCK")
   updateStockCache()
-
   local items = {}
   for id, count in pairs(stockCache) do
-    if count > 0 then
-      items[#items + 1] = { id = id, count = count }
-    end
+    if count > 0 then items[#items + 1] = { id = id, count = count } end
   end
-
   table.sort(items, function(a, b) return a.count > b.count end)
-
+  dispSetCursorPos(1, 3)
   for i = 1, math.min(20, #items) do
     local item = items[i]
     local short = string.match(item.id, "^%w+:(.+)$") or item.id
-    outputln(string.format("%2d. %-25s %6d", i, short, item.count))
+    dispSetTextColor(i <= 5 and colors.white or colors.gray)
+    dispWrite(string.format("%2d. %-25s %6d", i, short, item.count))
+    dispWriteLn()
   end
-
   if #items == 0 then
-    outputln("  (no items in stock)")
+    dispSetTextColor(colors.gray)
+    dispWriteLn("  (no items in stock)")
   end
-
-  outputln("")
-  outputln("(press any key to return...)")
-  readkey()
+  dispSetCursorPos(1, math.min(22, 3 + #items + 2))
+  dispSetTextColor(colors.darkGray)
+  dispWriteLn("(press any key to return...)")
+  sleep(2)
 end
 
-local function showCraftController()
-  clearScreen()
-  drawHeader("CRAFT CONTROLLER")
-
+local function drawCraftController()
   local recipeList = {}
-  for id in pairs(recipes) do
-    recipeList[#recipeList + 1] = id
-  end
+  for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
   table.sort(recipeList)
-
   selectedRecipe = selectedRecipe or 1
-  if selectedRecipe > #recipeList then
-    selectedRecipe = 1
-  end
-
+  if selectedRecipe > #recipeList then selectedRecipe = 1 end
   local recipeId = recipeList[selectedRecipe]
   if not recipeId then
-    outputln("No recipe selected!")
-    readkey()
+    dispWriteLn("No recipe selected!")
+    sleep(2)
     return
   end
-
   local r = recipes[recipeId]
-  outputln("Recipe: " .. recipeId)
-  outputln("Output: " .. r.count .. "x " .. r.output)
-  outputln("Send to: " .. (r.sendTo or "unknown"))
-  outputln("")
-  outputln("INGREDIENTS:")
-
+  drawHeader("CRAFT CONTROLLER")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, 3)
+  dispWriteLn("Recipe: " .. recipeId)
+  dispWriteLn("Output: " .. r.count .. "x " .. r.output)
+  dispWriteLn("Send to: " .. (r.sendTo or "unknown"))
+  dispWriteLn("")
+  dispWriteLn("INGREDIENTS:")
+  local y = 6
   for i, ingId in ipairs(r.ingredients) do
     local need = r.ingredientCounts[i] or 1
     local have = getStock(ingId)
     local short = string.match(ingId, "^%w+:(.+)$") or ingId
     local status = have >= need and "[OK] " or "[LOW] "
-    outputln("  " .. status .. short .. ": " .. have .. "/" .. need)
+    dispSetTextColor(have >= need and colors.green or colors.red)
+    dispSetCursorPos(2, y)
+    dispWrite(status .. short .. ": " .. have .. "/" .. need)
+    dispWriteLn()
+    y = y + 1
   end
-
-  outputln("")
-  outputln("[1] Execute craft")
-  outputln("[2] Show queue")
-  outputln("[Q] Back")
-  outputln("")
-  output("Choice: ")
+  y = y + 1
+  dispWriteLn("")
+  dispSetCursorPos(1, y)
+  dispSetTextColor(colors.white)
+  drawMenuItem(2, y, false, "[1] Execute craft")
+  drawMenuItem(2, y + 1, false, "[2] Show queue")
+  drawMenuItem(2, y + 2, false, "[Q] Back")
+  dispWriteLn("")
+  dispWrite("Choice: ")
   local choice = readln()
   if not choice then return end
 
   local queue, err = buildCraftQueue(r.output, r.count)
   if err and err ~= "in stock" then
-    outputln("Error: " .. err)
-    readkey()
+    dispWriteLn("Error: " .. err)
+    sleep(2)
     return
   end
-
   if err == "in stock" then
-    outputln(r.output .. " is already in stock")
-    readkey()
+    dispWriteLn(r.output .. " is already in stock")
+    sleep(2)
     return
   end
-
   if choice == "2" then
-    outputln("")
-    outputln("CRAFT QUEUE:")
+    dispWriteLn("")
+    dispWriteLn("CRAFT QUEUE:")
     for i, step in ipairs(queue) do
       local short = string.match(step.item, "^%w+:(.+)$") or step.item
-      outputln("  " .. i .. ". " .. step.count .. "x " .. short)
+      dispWriteLn("  " .. i .. ". " .. step.count .. "x " .. short)
     end
-    readkey()
+    sleep(2)
     return
   end
-
   -- Execute
-  outputln("")
-  outputln("EXECUTING...")
+  dispWriteLn("")
+  dispWriteLn("EXECUTING...")
   for _, step in ipairs(queue) do
     local short = string.match(step.item, "^%w+:(.+)$") or step.item
     local ok, msg = executeCraftToPort(step.item, step.count, r.sendTo)
     local status = ok and "[OK] " or "[FAIL] "
-    outputln("  " .. status .. short .. ": " .. msg)
+    dispSetTextColor(ok and colors.green or colors.red)
+    dispWriteLn("  " .. status .. short .. ": " .. msg)
   end
-
   updateStockCache()
-  outputln("")
-  outputln("Done.")
-  readkey()
+  dispWriteLn("")
+  dispWriteLn("Done.")
+  sleep(2)
   selectedRecipe = nil
 end
 
@@ -794,13 +720,24 @@ end
 -- ---------------------------------------------------------------------------
 
 local function main()
+  -- Initial scan and clipboard load
+  scanAllSides()
   loadClipboard()
   updateStockCache()
+  selectedRecipe = 1
+
+  -- If we have a monitor, show a brief confirmation
+  if onMonitor then
+    dispClear()
+    dispSetCursorPos(1, 1)
+    dispSetTextColor(colors.green)
+    dispWrite("Monitor ready. Rendering menu...")
+    sleep(2)
+  end
 
   local running = true
-
   while running do
-    showMainMenu()
+    drawMainMenu()
 
     local key = readkey()
     if not key then
@@ -814,41 +751,54 @@ local function main()
       loadClipboard()
       updateStockCache()
     elseif key == keys.c then
-      showStockScreen()
+      drawStockScreen()
     elseif key == keys.t then
       if selectedRecipe then
-        showCraftController()
+        drawCraftController()
       else
-        outputln("Enter recipe number (1-" .. countTable(recipes) .. "):")
-        output("> ")
+        dispWriteLn("Enter recipe number (1-" .. countTable(recipes) .. "):")
+        dispWrite("> ")
         local n = readln()
         if n then
           local num = tonumber(n)
           if num and num >= 1 and num <= countTable(recipes) then
             selectedRecipe = num
-            showCraftController()
+            drawCraftController()
           end
         end
       end
     elseif type(key) == "number" and key >= 48 and key <= 57 then
-      -- Number keys 0-9 (ASCII codes). Convert to recipe index.
-      local num = key - 48  -- '0'→0, '1'→1, ..., '9'→9
+      local num = key - 48
       local recipeList = {}
       for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
       table.sort(recipeList)
       if num >= 1 and num <= #recipeList then
         selectedRecipe = num
-        showCraftController()
+        drawCraftController()
       else
-        outputln("No recipe #" .. num)
-        readkey()
+        dispWriteLn("No recipe #" .. num)
+        sleep(1)
       end
-    else
-      -- Unknown key, just wait for another
+    elseif key == keys.up or key == keys.w then
+      local recipeList = {}
+      for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
+      table.sort(recipeList)
+      if #recipeList > 0 then
+        selectedRecipe = selectedRecipe - 1
+        if selectedRecipe < 1 then selectedRecipe = #recipeList end
+      end
+    elseif key == keys.down or key == keys.s then
+      local recipeList = {}
+      for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
+      table.sort(recipeList)
+      if #recipeList > 0 then
+        selectedRecipe = selectedRecipe + 1
+        if selectedRecipe > #recipeList then selectedRecipe = 1 end
+      end
     end
   end
 
-  outputln("\nShutting down.\n")
+  dispWriteLn("\nShutting down.\n")
 end
 
 -- Run
