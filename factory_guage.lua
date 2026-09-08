@@ -200,9 +200,13 @@ local frogPorts = {}
 local selectedIndex = 1
 local currentScreen = "main"
 local detectedPeripherals = {}
+local stockTicker = nil
+local stockCache = {}  -- cached stock levels: { itemName = count }
 
 local function scanAllSides()
   detectedPeripherals = {}
+  stockTicker = nil
+  stockCache = {}
   if not has_peripheral_find then return end
   local sides_to_scan = { "left", "right", "front", "back", "top", "bottom" }
   for _, sideName in ipairs(sides_to_scan) do
@@ -211,6 +215,117 @@ local function scanAllSides()
       detectedPeripherals[sideName] = {
         side = sideName, name = sideName, type = comp.type, comp = comp,
       }
+    end
+  end
+  -- Try to find a stock ticker peripheral (Create stock ticker / item display)
+  local tickerNames = {
+    "stock_ticker", "stockticker", "tickertape", "stock_display",
+    "create:stock_ticker", "create:stockticker", "item_display",
+    "stock", "ticker", "create:ticker",
+  }
+  for _, name in ipairs(tickerNames) do
+    local ok, comp = pcall(function() return _G.peripheral.find(name) end)
+    if ok and comp then
+      stockTicker = comp
+      print("[diag] stock ticker: DETECTED as '" .. name .. "'")
+      break
+    end
+  end
+  if not stockTicker then
+    print("[diag] stock ticker: NOT FOUND")
+  end
+end
+
+-- Read stock levels from the ticker peripheral.
+-- Tries multiple API call patterns since the exact interface varies.
+local function readStockFromTicker()
+  stockCache = {}
+  if not stockTicker then return end
+
+  local function tryGetItems()
+    -- Pattern 1: getItems() returns { {name=id, count=n} }
+    if stockTicker.getItems then
+      local ok, items = pcall(stockTicker.getItems)
+      if ok and items and type(items) == "table" then
+        for _, item in ipairs(items) do
+          local id = item.id or item.name or item.displayName or ""
+          local count = item.count or item.size or item.amount or 0
+          if id ~= "" and count and count > 0 then
+            stockCache[id] = (stockCache[id] or 0) + count
+          end
+        end
+        if next(stockCache) then return true end
+      end
+    end
+    -- Pattern 2: getAllItems() 
+    if stockTicker.getAllItems then
+      local ok, items = pcall(stockTicker.getAllItems)
+      if ok and items and type(items) == "table" then
+        for _, item in ipairs(items) do
+          local id = item.id or item.name or item.displayName or ""
+          local count = item.count or item.size or item.amount or 0
+          if id ~= "" and count and count > 0 then
+            stockCache[id] = (stockCache[id] or 0) + count
+          end
+        end
+        if next(stockCache) then return true end
+      end
+    end
+    -- Pattern 3: getStock() or getStockLevels()
+    for _, fnName in ipairs({ "getStock", "getStockLevels", "getStockItems" }) do
+      if stockTicker[fnName] then
+        local ok, result = pcall(stockTicker[fnName])
+        if ok and result and type(result) == "table" then
+          -- Could be { itemName = count } or { {name, count} }
+          if result[1] and type(result[1]) == "table" then
+            -- Array of items
+            for _, item in ipairs(result) do
+              local id = item.id or item.name or item[1] or ""
+              local count = item.count or item[2] or item.amount or 0
+              if id ~= "" and count and count > 0 then
+                stockCache[id] = (stockCache[id] or 0) + count
+              end
+            end
+          else
+            -- Key-value table: name -> count
+            for name, count in pairs(result) do
+              if type(count) == "number" and count > 0 then
+                stockCache[name] = (stockCache[name] or 0) + count
+              end
+            end
+          end
+          if next(stockCache) then return true end
+        end
+      end
+    end
+    -- Pattern 4: get() returns a single item or stock overview
+    if stockTicker.get then
+      local ok, result = pcall(stockTicker.get)
+      if ok and result then
+        if type(result) == "table" then
+          if result.count and result.name then
+            stockCache[result.name] = result.count
+          elseif result[1] then
+            for _, item in ipairs(result) do
+              local id = item.id or item.name or ""
+              local count = item.count or item.size or 0
+              if id ~= "" and count and count > 0 then
+                stockCache[id] = (stockCache[id] or 0) + count
+              end
+            end
+          end
+          if next(stockCache) then return true end
+        end
+      end
+    end
+    return false
+  end
+
+  if not tryGetItems() then
+    -- Fallback: try to read as a monitor (some stock tickers are monitor peripherals)
+    if stockTicker.setTextColor and stockTicker.write then
+      -- It's a monitor-like peripheral; can't read stock from it directly
+      print("[diag] stock ticker: appears to be a display-only peripheral")
     end
   end
 end
@@ -263,6 +378,38 @@ local function drawMainMenu()
     else
       dispWrite("  " .. item.text .. string.rep(" ", w - 4 - #item.text))
     end
+    y = y + 1
+  end
+
+  -- Stock overview (read from ticker if available)
+  y = y + 1
+  dispSetTextColor(colors.white)
+  dispSetBackgroundColor(colors.black)
+  dispSetCursorPos(1, y)
+  dispWrite("STOCK:")
+  y = y + 1
+  if next(stockCache) then
+    local itemList = {}
+    for id, count in pairs(stockCache) do
+      table.insert(itemList, { id = id, count = count })
+    end
+    table.sort(itemList, function(a, b) return a.count > b.count end)
+    local show = math.min(#itemList, 6)
+    for i = 1, show do
+      local short = string.match(itemList[i].id, "^%w+:(.+)$") or itemList[i].id
+      dispSetCursorPos(2, y)
+      dispWrite(i .. ". " .. short .. ": " .. itemList[i].count)
+      y = y + 1
+    end
+    if #itemList > show then
+      dispSetCursorPos(2, y)
+      dispWrite("... and " .. (#itemList - show) .. " more")
+      y = y + 1
+    end
+  else
+    dispSetCursorPos(2, y)
+    dispSetTextColor(colors.gray)
+    dispWrite("  (no stock data — check stock ticker connection)")
     y = y + 1
   end
 
@@ -451,7 +598,17 @@ local function showSettings()
   dispWriteLn("  Default Frog Ports:     " .. (#frogPorts > 0 and table.concat(frogPorts, ", ") or "none"))
   dispSetCursorPos(1, 7)
   dispWriteLn("  Monitor auto-detect:    " .. (onMonitor and "Enabled" or "Disabled"))
+  dispSetCursorPos(1, 8)
+  dispWriteLn("  Stock ticker:           " .. (stockTicker and "Connected" or "Not found"))
   dispSetCursorPos(1, 9)
+  if next(stockCache) then
+    dispSetTextColor(colors.white)
+    dispWriteLn("  Items in stock:         " .. countTable(stockCache))
+  else
+    dispSetTextColor(colors.gray)
+    dispWriteLn("  Items in stock:         0")
+  end
+  dispSetCursorPos(1, 11)
   dispSetTextColor(colors.darkGray)
   dispWriteLn("")
   dispWriteLn("(press any key to return...)")
@@ -532,6 +689,9 @@ local function main()
   selectedIndex = 1
   currentScreen = "main"
 
+  -- Read initial stock from ticker
+  readStockFromTicker()
+
   if onMonitor then
     dispClear()
     dispSetCursorPos(1, 1)
@@ -577,16 +737,19 @@ local function main()
       showCreateFactoryGauge()
       currentScreen = "main"
       selectedIndex = 1
+      readStockFromTicker()
 
     elseif currentScreen == "frogport" then
       showFrogPortList()
       currentScreen = "main"
       selectedIndex = 2
+      readStockFromTicker()
 
     elseif currentScreen == "settings" then
       showSettings()
       currentScreen = "main"
       selectedIndex = 3
+      readStockFromTicker()
     end
   end
 
