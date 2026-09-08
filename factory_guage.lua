@@ -125,11 +125,30 @@ local function prompt(text)
 end
 
 -- Clear the active display (monitor when available, term when not).
+-- When a monitor is present, also clear the computer's term and write
+-- a status line so the user knows the computer is driving the monitor.
 local function dispClear()
   if onMonitor and monitor and hasFn(monitor, "clear") then
     monitor.clear()
   elseif has_term and has_term_clear then
     _G.term.clear()
+  end
+  -- Always ensure the computer's term shows something useful.
+  -- Even when a monitor is driving the display, the user needs to see
+  -- on the computer that it's active and what to do.
+  if has_term and has_term_clear and has_term_write then
+    _G.term.clear()
+    _G.term.setCursorPos(1, 1)
+    _G.term.setTextColor(colors.green)
+    _G.term.write("Factory Gauge — monitor active")
+    _G.term.setTextColor(colors.gray)
+    _G.term.setCursorPos(1, 2)
+    _G.term.write("Use THIS computer's keyboard to control")
+    _G.term.setCursorPos(1, 3)
+    _G.term.write("W/S: navigate  |  Enter: select  |  1-9: recipe")
+    _G.term.setCursorPos(1, 4)
+    _G.term.write("T: craft  |  C: stock  |  R: rescan  |  Q: quit")
+    termFlush()
   end
 end
 
