@@ -255,8 +255,25 @@ end
 
 -- Simple key-only reader (no echo). Used for menu navigation and "press any key".
 local function readkey()
-  local evt, key = os.pullEvent("key")
-  return key
+  -- CC:T fires letter keys both as "key" events (numeric key constants like
+  -- keys.w) and as "char" events (single-character strings like "w"). We need
+  -- to accept both so that A/R/B/W/S navigation works regardless of how the
+  -- client fires them.
+  while true do
+    local evt, data = os.pullEvent()
+    if evt == "key" then
+      return data  -- numeric key constant (keys.w, keys.enter, keys.escape, …)
+    elseif evt == "char" then
+      local c = data
+      if type(c) == "string" and #c == 1 then
+        return c  -- single-character string ("w", "a", "r", "b", …)
+      end
+      -- Ignore multi-char / non-printable char events.
+    elseif evt == "key_down" or evt == "key_up" then
+      -- Some CC:T builds fire these instead — return the key code.
+      return data
+    end
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1082,36 +1099,52 @@ local function showFrogPortList()
     local key = readkey()
     if not key then break end
 
-    if key == keys.q or key == keys.escape then
+    -- Normalise: both string chars ("w", "a", "r"… ) and numeric key
+    -- constants (keys.w, keys.enter, keys.escape, …) can arrive.
+    local norm = type(key) == "string" and string.lower(key) or nil
+    local isUp    = (key == keys.up) or (norm == "w" or norm == "up")
+    local isDown  = (key == keys.down) or (norm == "s" or norm == "down")
+    local isEsc   = (key == keys.escape) or (key == keys.q)
+                     or (norm == "q") or (norm == "escape")
+    local isEnter = (key == keys.enter)
+    local isA     = (norm == "a")
+    local isR     = (norm == "r")
+    local isB     = (norm == "b")
+
+    if isEsc then
       running = false
-    elseif key == keys.enter then
+
+    elseif isEnter then
       running = false
-    elseif key == keys.up or key == keys.w then
+
+    elseif isUp then
       if selectedIndex > 1 then
         selectedIndex = selectedIndex - 1
       else
         selectedIndex = #frogPorts
       end
-    elseif key == keys.down or key == keys.s then
+
+    elseif isDown then
       if selectedIndex < #frogPorts then
         selectedIndex = selectedIndex + 1
       else
         selectedIndex = 1
       end
-    elseif type(key) == "string" then
-      local lower = string.lower(key)
-      if lower == "a" then
-        addFrogPort()
-        showFrogPortList()
-        return
-      elseif lower == "r" then
-        removeFrogPort()
-        showFrogPortList()
-        return
-      elseif lower == "b" then
-        running = false
-      end
+
+    elseif isA then
+      addFrogPort()
+      showFrogPortList()
+      return
+
+    elseif isR then
+      removeFrogPort()
+      showFrogPortList()
+      return
+
+    elseif isB then
+      running = false
     end
+    -- Any other key is ignored and we loop again.
   end
 end
 
@@ -1252,9 +1285,18 @@ local function main()
       local key = readkey()
       if not key then break end
 
-      if key == keys.q or key == keys.escape then
+      -- Normalise both string chars ("w") and numeric key constants (keys.w).
+      local norm = type(key) == "string" and string.lower(key) or nil
+      local isUp    = (key == keys.up)    or (norm == "w"  or norm == "up")
+      local isDown  = (key == keys.down)  or (norm == "s"  or norm == "down")
+      local isEsc   = (key == keys.escape) or (key == keys.q)
+                       or (norm == "q") or (norm == "escape")
+      local isEnter = (key == keys.enter)
+
+      if isEsc then
         running = false
-      elseif key == keys.enter then
+
+      elseif isEnter then
         if selectedIndex == 1 then
           currentScreen = "create"
         elseif selectedIndex == 2 then
@@ -1262,13 +1304,15 @@ local function main()
         elseif selectedIndex == 3 then
           currentScreen = "settings"
         end
-      elseif key == keys.up or key == keys.w then
+
+      elseif isUp then
         if selectedIndex > 1 then
           selectedIndex = selectedIndex - 1
         else
           selectedIndex = 3
         end
-      elseif key == keys.down or key == keys.s then
+
+      elseif isDown then
         if selectedIndex < 3 then
           selectedIndex = selectedIndex + 1
         else
