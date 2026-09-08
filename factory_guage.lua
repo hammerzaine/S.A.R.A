@@ -301,6 +301,7 @@ local function scanAllSides()
     for _, sideName in ipairs(sides_to_scan) do
       local comp = detectedPeripherals[sideName] and detectedPeripherals[sideName].comp
       if comp and type(comp) == "table" then
+        -- Check flat methods first
         for _, method in ipairs({ "getStock", "getItems", "getStockItems", "getTickers", "getTicker", "getStockLevels" }) do
           if comp[method] then
             stockTicker = comp
@@ -310,23 +311,32 @@ local function scanAllSides()
             break
           end
         end
+        -- Search nested tables up to 3 levels deep for stock/item/list methods
         if not stockTicker then
-          for k, v in pairs(comp) do
-            if type(k) == "string" and type(v) == "table" then
-              for nk, nv in pairs(v) do
-                if type(nk) == "string" and type(nv) == "function" and
-                   (string.find(nk, "stock", 1, true) or
-                    string.find(nk, "Stock", 1, true) or
-                    string.find(nk, "item", 1, true)) then
+          local function searchNested(tbl, depth, path)
+            if depth > 3 then return false end
+            for k, v in pairs(tbl) do
+              if type(k) == "string" and type(v) == "function" then
+                local lower = string.lower(k)
+                if string.find(lower, "stock", 1, true) or
+                   string.find(lower, "item", 1, true) or
+                   string.find(lower, "list", 1, true) or
+                   string.find(lower, "detail", 1, true) then
                   stockTicker = comp
                   stockTickerSide = sideName
                   diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
-                    " via nested '" .. k .. "." .. nk .. "'"
-                  break
+                    " via '" .. path .. "." .. k .. "'"
+                  return true
+                end
+              elseif type(k) == "string" and type(v) == "table" then
+                if searchNested(v, depth + 1, path .. "." .. k) then
+                  return true
                 end
               end
             end
+            return false
           end
+          searchNested(comp, 1, "peripheral")
         end
       end
       if stockTicker then break end
