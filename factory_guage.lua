@@ -263,7 +263,7 @@ local function scanAllSides()
     end
   end
 
-  -- 2. Search for stock ticker by type name
+  -- 2. Search for stock ticker by type name OR direct peripheral property
   local tickerNames = {
     "stock_ticker", "stockticker", "tickertape", "stock_display",
     "create:stock_ticker", "create:stockticker", "item_display",
@@ -294,6 +294,13 @@ local function scanAllSides()
         "' on side " .. (stockTickerSide or "unknown")
       break
     end
+  end
+
+  -- 2b. Direct peripheral.stock property check (some CC:T versions expose it this way)
+  if not stockTicker and _G.peripheral and _G.peripheral.stock and type(_G.peripheral.stock) == "table" then
+    stockTicker = _G.peripheral.stock
+    stockTickerSide = "indirect"
+    diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED via peripheral.stock (direct property)"
   end
 
   if not stockTicker then
