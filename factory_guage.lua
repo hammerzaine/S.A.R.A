@@ -303,11 +303,18 @@ local function scanAllSides()
     end
   end
 
-  -- 2c. Direct side-by-side search: wrap every side and check for stock methods
+  -- Deep side-by-side search: enumerate every key on every side's component and
+  -- look for ANY function whose name contains stock/item/list/ticker/detail/filter/request.
+  -- Uses a recursive search so deeply-nested methods (like requestFiltered.getStockItemDetail.list)
+  -- are found regardless of depth.
   if not stockTicker then
+    print("[diag] Starting deep side-by-side stock scan...")
     for _, sideName in ipairs(sides_to_scan) do
-      local ok, comp = pcall(function() return _G.peripheral.wrap(sideName) end)
-      if not ok or not comp or type(comp) ~= "table" then
+      local comp = nil
+      local ok = pcall(function()
+        comp = _G.peripheral.wrap(sideName)
+      end)
+      if not ok or not comp then
         if _G.peripheral and type(_G.peripheral) == "table" then
           local sideProp = _G.peripheral[sideName]
           if type(sideProp) == "table" then
@@ -316,24 +323,49 @@ local function scanAllSides()
         end
       end
       if comp and type(comp) == "table" then
-        if comp.stock and type(comp.stock) == "table" and
-           comp.stock.getItemDetail and type(comp.stock.getItemDetail) == "function" then
-          stockTicker = comp
-          stockTickerSide = sideName
-          diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
-            " via comp.stock.getItemDetail"
+        print("[diag] Deep scanning side " .. sideName .. "...")
+        -- Recursive search for stock-related functions at any depth
+        local function deepSearch(tbl, path, depth)
+          if depth > 5 then return false end
+          for k, v in pairs(tbl) do
+            if type(k) == "string" then
+              local lower = string.lower(k)
+              if lower:find("stock") or lower:find("item") or
+                 lower:find("list") or lower:find("ticker") or
+                 lower:find("detail") or lower:find("filter") or
+                 lower:find("request") then
+                if type(v) == "function" then
+                  stockTicker = comp
+                  stockTickerSide = sideName
+                  diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
+                    " via '" .. path .. "." .. k .. "' (function)"
+                  print("[diag] FOUND on " .. sideName .. ": " .. path .. "." .. k)
+                  return true
+                elseif type(v) == "table" then
+                  diagLines[#diagLines + 1] = "diag: deep scan '" .. path .. "." .. k .. "' is a table"
+                  print("[diag] deep: " .. path .. "." .. k .. " is a table")
+                  if deepSearch(v, path .. "." .. k, depth + 1) then
+                    return true
+                  end
+                end
+              end
+            elseif type(k) == "string" and type(v) == "table" then
+              if deepSearch(v, path .. "." .. k, depth + 1) then
+                return true
+              end
+            end
+          end
+          return false
+        end
+        if deepSearch(comp, "component", 1) then
           break
         end
-        if comp.requestFiltered and type(comp.requestFiltered) == "table" and
-           comp.requestFiltered.getStockItemDetail and type(comp.requestFiltered.getStockItemDetail) == "table" and
-           comp.requestFiltered.getStockItemDetail.list and type(comp.requestFiltered.getStockItemDetail.list) == "function" then
-          stockTicker = comp
-          stockTickerSide = sideName
-          diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
-            " via comp.requestFiltered.getStockItemDetail.list"
-          break
-        end
+      else
+        print("[diag] side " .. sideName .. " not accessible")
       end
+    end
+    if not stockTicker then
+      print("[diag] Deep scan complete — stock ticker not found on any side")
     end
   end
 
