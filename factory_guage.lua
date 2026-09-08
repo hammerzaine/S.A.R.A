@@ -1,4 +1,4 @@
-
+#!/usr/bin/env lua
 -- factory_guage.lua
 -- CC:Tweaked script — simplified menu-driven factory gauge
 --
@@ -387,7 +387,7 @@ local function scanAllSides()
       y = y + 1
     end
 
-    -- If we found a stock ticker, show its callable methods
+    -- If we found a stock ticker, show its callable methods on the MONITOR
     if stockTicker and y + 2 <= h then
       y = y + 2
       dispSetTextColor(colors.darkGray)
@@ -406,10 +406,8 @@ local function scanAllSides()
             y = y + 1
           end
         elseif type(k) == "string" and type(v) == "table" then
-          local hasNested = false
           for nk, nv in pairs(v) do
             if type(nk) == "string" and type(nv) == "function" then
-              hasNested = true
               if y > h then break end
               dispSetCursorPos(2, y)
               dispWrite(k .. "." .. nk .. " (fn)")
@@ -427,6 +425,7 @@ local function scanAllSides()
       dispWrite("Press any key to continue...")
     end
 
+    -- Mirror to computer's term
     if has_term and has_term_write then
       _G.term.clear()
       _G.term.setCursorPos(1, 1)
@@ -441,7 +440,7 @@ local function scanAllSides()
           _G.term.write(line)
         end
       end
-      local tY = #diagLines + 2  -- baseline for ticker method listing (may be unused)
+      local tY = #diagLines + 2
       if stockTicker then
         tY = #diagLines + 2
         _G.term.setCursorPos(1, tY)
@@ -469,11 +468,13 @@ local function scanAllSides()
           end
         end
       end
-      local promptY = math.min(tY + 1, h - 1)
-      _G.term.setCursorPos(1, promptY + 1)
-      _G.term.setTextColor(colors.gray)
-      _G.term.write("Press any key to continue...")
-      if has_term_flush then _G.term.flush() end
+      local promptY = math.max(tY + 1, #diagLines + 2)
+      if promptY < h then
+        _G.term.setCursorPos(1, promptY + 1)
+        _G.term.setTextColor(colors.gray)
+        _G.term.write("Press any key to continue...")
+        if has_term_flush then _G.term.flush() end
+      end
     end
 
     local evt = os.pullEventRaw("key")
@@ -485,6 +486,8 @@ end
 -- Supports Create stock ticker patterns. The user's ticker exposes:
 --   stock.getItemDetail
 --   requestFiltered.getStockItemDetail.list
+-- Stock reading results are printed to the computer's terminal via print()
+-- so you can see exactly what the methods return.
 -- ---------------------------------------------------------------------------
 
 local function readStockFromTicker()
@@ -497,8 +500,9 @@ local function readStockFromTicker()
     end
   end
 
-  local function describeResult(result)
-    -- Returns a short description of what the result looks like
+  -- Debug helper: prints to computer's term so user can see what methods return
+  local function debugPrint(label, result)
+    local desc
     if type(result) == "table" then
       local keys = {}
       local count = 0
@@ -508,10 +512,10 @@ local function readStockFromTicker()
           local vtype = type(v)
           if vtype == "table" then
             local subkeys = {}
-            local subcount = 0
+            local subc = 0
             for sk, sv in pairs(v) do
-              subcount = subcount + 1
-              if subcount <= 3 then subkeys[#subkeys + 1] = sk end
+              subc = subc + 1
+              if subc <= 3 then subkeys[#subkeys + 1] = sk end
             end
             keys[#keys + 1] = k .. "={ " .. table.concat(subkeys, ",") .. " }"
           else
@@ -520,14 +524,15 @@ local function readStockFromTicker()
         end
       end
       if count > 5 then keys[#keys + 1] = "...(" .. count .. " keys)" end
-      return "table{ " .. table.concat(keys, ", ") .. " }"
+      desc = "table{ " .. table.concat(keys, ", ") .. " }"
     elseif type(result) == "string" then
-      return "string: " .. result
+      desc = "string: " .. result
     elseif type(result) == "number" then
-      return "number: " .. result
+      desc = "number: " .. result
     else
-      return "type=" .. type(result)
+      desc = "type=" .. type(result)
     end
+    print("[stock-debug] " .. label .. ": " .. desc)
   end
 
   -- Pattern A: stock.getItemDetail(itemId)
@@ -536,24 +541,26 @@ local function readStockFromTicker()
     if stockTicker.stock.getItemDetail and type(stockTicker.stock.getItemDetail) == "function" then
       -- Try with no argument first
       local ok, result = pcall(stockTicker.stock.getItemDetail)
-      if ok and result and type(result) == "table" and next(result) then
-        diagLines[#diagLines + 1] = "DEBUG stock.getItemDetail(): " .. describeResult(result)
-        if result.items and type(result.items) == "table" then
-          for _, item in ipairs(result.items) do
-            addItem(item.id or item.name or item.displayName or "",
-                    item.count or item.size or item.amount or 0)
+      if ok and result then
+        debugPrint("stock.getItemDetail()", result)
+        if result and type(result) == "table" then
+          if result.items and type(result.items) == "table" then
+            for _, item in ipairs(result.items) do
+              addItem(item.id or item.name or item.displayName or "",
+                      item.count or item.size or item.amount or 0)
+            end
+            if next(stockCache) then return end
+          elseif result[1] and type(result[1]) == "table" then
+            for _, item in ipairs(result) do
+              addItem(item.id or item.name or item.displayName or "",
+                      item.count or item.size or item.amount or 0)
+            end
+            if next(stockCache) then return end
+          elseif result.id or result.name then
+            addItem(result.id or result.name or result.displayName or "",
+                    result.count or result.size or result.amount or 1)
+            if next(stockCache) then return end
           end
-          if next(stockCache) then return end
-        elseif result[1] and type(result[1]) == "table" then
-          for _, item in ipairs(result) do
-            addItem(item.id or item.name or item.displayName or "",
-                    item.count or item.size or item.amount or 0)
-          end
-          if next(stockCache) then return end
-        elseif result.id or result.name then
-          addItem(result.id or result.name or result.displayName or "",
-                  result.count or result.size or result.amount or 1)
-          if next(stockCache) then return end
         end
       end
 
@@ -562,8 +569,8 @@ local function readStockFromTicker()
       for _, testId in ipairs(testItems) do
         if not next(stockCache) then
           local ok, result = pcall(stockTicker.stock.getItemDetail, testId)
-          if ok and result and type(result) == "table" and next(result) then
-            diagLines[#diagLines + 1] = "DEBUG stock.getItemDetail(" .. testId .. "): " .. describeResult(result)
+          if ok and result and type(result) == "table" then
+            debugPrint("stock.getItemDetail(" .. testId .. ")", result)
             if result.count then
               addItem(testId, result.count)
               if next(stockCache) then return end
@@ -589,7 +596,7 @@ local function readStockFromTicker()
            type(stockTicker.requestFiltered.getStockItemDetail.list) == "function" then
           local ok, result = pcall(stockTicker.requestFiltered.getStockItemDetail.list)
           if ok and result then
-            diagLines[#diagLines + 1] = "DEBUG requestFiltered.getStockItemDetail.list(): " .. describeResult(result)
+            debugPrint("requestFiltered.getStockItemDetail.list()", result)
             if type(result) == "table" then
               if result.items and type(result.items) == "table" then
                 for _, item in ipairs(result.items) do
@@ -991,7 +998,7 @@ local function main()
   selectedIndex = 1
   currentScreen = "main"
 
-  -- Read initial stock from ticker
+  -- Read initial stock from ticker — results go to computer's term via print()
   readStockFromTicker()
 
   if onMonitor then
