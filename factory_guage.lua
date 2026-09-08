@@ -317,18 +317,16 @@ local function scanAllSides()
     _G.term.setTextColor(colors.yellow)
     _G.term.write("=== DIAGNOSTICS ===")
     _G.term.setTextColor(colors.white)
+    local y = 2
     for _, line in ipairs(diagLines) do
-      _G.term.setCursorPos(1, _G.term.getCursorPos() and _G.term.getCursorPos() or 2)
-      local cx, cy = _G.term.getCursorPos()
-      _G.term.setCursorPos(1, cy + 1)
+      _G.term.setCursorPos(1, y)
       _G.term.write(line)
+      y = y + 1
     end
     _G.term.setTextColor(colors.gray)
-    _G.term.setCursorPos(1, _G.term.getCursorPos() and _G.term.getCursorPos() + 1 or 20)
+    _G.term.setCursorPos(1, y + 1)
     _G.term.write("Press any key to continue...")
-    -- Make sure term.flush exists before calling it
     if has_term_flush then _G.term.flush() end
-    -- Wait for keypress — this pauses until user acknowledges
     local evt = os.pullEventRaw("key")
   end
 end
