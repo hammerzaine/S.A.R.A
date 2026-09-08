@@ -211,6 +211,10 @@ local function scanAllSides()
   stockCache = {}
   if not has_peripheral_find then return end
 
+  -- Write diagnostics directly to the computer's term (not the monitor),
+  -- so they aren't wiped by monitor.clear() later.
+  local diagLines = {}
+
   -- 1. Scan all sides, wrapping each one to get its type
   local sides_to_scan = { "left", "right", "front", "back", "top", "bottom" }
   for _, sideName in ipairs(sides_to_scan) do
@@ -218,7 +222,6 @@ local function scanAllSides()
     if ok and comp then
       local typ = type(comp)
       if typ == "table" then
-        -- Try to get type via component.getType() or check known fields
         local compType = "unknown"
         if hasFn(comp, "getType") then
           compType = comp.getType()
@@ -227,7 +230,6 @@ local function scanAllSides()
         elseif hasFn(comp, "getName") then
           compType = comp.getName()
         end
-        -- Also check by looking at what methods it has
         local methods = {}
         for k, v in pairs(comp) do
           if type(k) == "string" and type(v) == "function" then
@@ -241,12 +243,17 @@ local function scanAllSides()
           comp = comp,
           methods = methods,
         }
-        print("[diag] side " .. sideName .. ": type=" .. compType .. " methods=" .. table.concat(methods, ","))
+        diagLines[#diagLines + 1] = "[diag] side " .. sideName .. ": type=" .. compType ..
+          " methods=" .. table.concat(methods, ",")
+      else
+        diagLines[#diagLines + 1] = "[diag] side " .. sideName .. ": not a table (type=" .. typ .. ")"
       end
+    else
+      diagLines[#diagLines + 1] = "[diag] side " .. sideName .. ": peripheral.wrap failed or no peripheral"
     end
   end
 
-  -- 2. Search for stock ticker by type name across ALL sides
+  -- 2. Search for stock ticker by type name
   local tickerNames = {
     "stock_ticker", "stockticker", "tickertape", "stock_display",
     "create:stock_ticker", "create:stockticker", "item_display",
@@ -258,7 +265,6 @@ local function scanAllSides()
     local ok, comp = pcall(function() return _G.peripheral.find(tickerName) end)
     if ok and comp then
       stockTicker = comp
-      -- Figure out which side it's on
       for sideName, p in pairs(detectedPeripherals) do
         if p.comp == comp then
           stockTickerSide = sideName
@@ -266,7 +272,6 @@ local function scanAllSides()
         end
       end
       if not stockTickerSide then
-        -- Fallback: wrap each side and compare
         for _, sideName in ipairs(sides_to_scan) do
           local w = _G.peripheral.wrap(sideName)
           if w == comp then
@@ -275,23 +280,23 @@ local function scanAllSides()
           end
         end
       end
-      print("[diag] stock ticker: DETECTED as '" .. tickerName .. "' on side " .. (stockTickerSide or "unknown"))
+      diagLines[#diagLines + 1] = "[diag] STOCK TICKER: DETECTED as '" .. tickerName ..
+        "' on side " .. (stockTickerSide or "unknown")
       break
     end
   end
 
   if not stockTicker then
-    print("[diag] stock ticker: NOT FOUND — trying all sides individually")
-    -- 3. Brute force: check every side for anything that looks like a stock ticker
+    diagLines[#diagLines + 1] = "[diag] STOCK TICKER: NOT FOUND by type name — checking methods..."
     for _, sideName in ipairs(sides_to_scan) do
       local comp = detectedPeripherals[sideName] and detectedPeripherals[sideName].comp
       if comp and type(comp) == "table" then
-        -- Check if it has stock-related methods
-        for _, method in ipairs({ "getStock", "getItems", "getStockItems", "getTickers", "getTicker" }) do
+        for _, method in ipairs({ "getStock", "getItems", "getStockItems", "getTickers", "getTicker", "getStockLevels" }) do
           if comp[method] then
             stockTicker = comp
             stockTickerSide = sideName
-            print("[diag] stock ticker: FOUND on side " .. sideName .. " via method '" .. method .. "'")
+            diagLines[#diagLines + 1] = "[diag] STOCK TICKER: FOUND on side " .. sideName ..
+              " via method '" .. method .. "'"
             break
           end
         end
@@ -301,7 +306,30 @@ local function scanAllSides()
   end
 
   if not stockTicker then
-    print("[diag] stock ticker: NOT FOUND — check what side it's on and what type it registers as")
+    diagLines[#diagLines + 1] = "[diag] STOCK TICKER: NOT FOUND — see above for what each side detected"
+  end
+
+  -- Print all diagnostics to the computer's term and WAIT for a key press
+  -- so the user can actually read them before the menu wipes the screen.
+  if has_term and has_term_write and #diagLines > 0 then
+    _G.term.clear()
+    _G.term.setCursorPos(1, 1)
+    _G.term.setTextColor(colors.yellow)
+    _G.term.write("=== DIAGNOSTICS ===")
+    _G.term.setTextColor(colors.white)
+    for _, line in ipairs(diagLines) do
+      _G.term.setCursorPos(1, _G.term.getCursorPos() and _G.term.getCursorPos() or 2)
+      local cx, cy = _G.term.getCursorPos()
+      _G.term.setCursorPos(1, cy + 1)
+      _G.term.write(line)
+    end
+    _G.term.setTextColor(colors.gray)
+    _G.term.setCursorPos(1, _G.term.getCursorPos() and _G.term.getCursorPos() + 1 or 20)
+    _G.term.write("Press any key to continue...")
+    -- Make sure term.flush exists before calling it
+    if has_term_flush then _G.term.flush() end
+    -- Wait for keypress — this pauses until user acknowledges
+    local evt = os.pullEventRaw("key")
   end
 end
 
