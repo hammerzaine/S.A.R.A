@@ -309,22 +309,32 @@ local function scanAllSides()
     diagLines[#diagLines + 1] = "[diag] STOCK TICKER: NOT FOUND — see above for what each side detected"
   end
 
-  -- Print all diagnostics to the computer's term and WAIT for a key press
-  -- so the user can actually read them before the menu wipes the screen.
+  -- Print all diagnostics to the computer's term and WAIT for a key press.
+  -- Keep it compact — show all sides but highlight the stock ticker.
+  -- CC:T terminal is ~19 lines tall; keep under 16 lines of content.
   if has_term and has_term_write and #diagLines > 0 then
     _G.term.clear()
     _G.term.setCursorPos(1, 1)
     _G.term.setTextColor(colors.yellow)
-    _G.term.write("=== DIAGNOSTICS ===")
+    _G.term.write("=== PERIPHERAL SCAN ===")
     _G.term.setTextColor(colors.white)
     local y = 2
     for _, line in ipairs(diagLines) do
-      _G.term.setCursorPos(1, y)
-      _G.term.write(line)
+      -- Highlight the stock ticker line
+      if string.find(line, "STOCK TICKER") then
+        _G.term.setTextColor(colors.green)
+        _G.term.setCursorPos(1, y)
+        _G.term.write(">> " .. line)
+        _G.term.setTextColor(colors.white)
+      else
+        _G.term.setCursorPos(1, y)
+        _G.term.write(line)
+      end
       y = y + 1
+      if y > 19 then break end  -- don't overflow the terminal
     end
     _G.term.setTextColor(colors.gray)
-    _G.term.setCursorPos(1, y + 1)
+    _G.term.setCursorPos(1, math.min(y + 1, 19))
     _G.term.write("Press any key to continue...")
     if has_term_flush then _G.term.flush() end
     local evt = os.pullEventRaw("key")
@@ -350,6 +360,35 @@ local function readStockFromTicker()
           end
         end
         if next(stockCache) then return true end
+      end
+    end
+    -- Pattern 1b: getItem() — singular, may return single item or list
+    if stockTicker.getItem then
+      local ok, result = pcall(stockTicker.getItem)
+      if ok and result then
+        if type(result) == "table" then
+          if result.count and result.name then
+            -- Single item: { name = "...", count = N }
+            stockCache[result.name] = (stockCache[result.name] or 0) + result.count
+          elseif result[1] and type(result[1]) == "table" then
+            -- Array of items
+            for _, item in ipairs(result) do
+              local id = item.id or item.name or item.displayName or ""
+              local count = item.count or item.size or item.amount or 1
+              if id ~= "" and count and count > 0 then
+                stockCache[id] = (stockCache[id] or 0) + count
+              end
+            end
+          elseif result.id or result.name then
+            -- Single item table with id/name fields
+            local id = result.id or result.name or result.displayName or ""
+            local count = result.count or result.size or result.amount or 1
+            if id ~= "" and count and count > 0 then
+              stockCache[id] = (stockCache[id] or 0) + count
+            end
+          end
+          if next(stockCache) then return true end
+        end
       end
     end
     -- Pattern 2: getAllItems() 
