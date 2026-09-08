@@ -1336,6 +1336,9 @@ local function main()
       local isR     = (key == "r")
       local isB     = (key == "b")
 
+      if isEsc then
+        running = false
+
       elseif isEnter then
         if selectedIndex == 1 then
           currentScreen = "create"
