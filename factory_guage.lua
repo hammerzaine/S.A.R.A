@@ -141,6 +141,14 @@ local function dispSetBackgroundColor(c)
   end
 end
 
+-- Set text scale on monitor (1 = default, 0.5 = smaller, 2 = larger).
+-- Ignored on computer term (can't change term text scale).
+local function dispSetTextScale(scale)
+  if onMonitor and monitor and hasFn(monitor, "setTextScale") then
+    monitor.setTextScale(scale)
+  end
+end
+
 local function dispGetSize()
   if onMonitor and monitor and hasFn(monitor, "getSize") then
     return monitor.getSize()
@@ -310,7 +318,8 @@ local function scanAllSides()
   end
 
   -- Print diagnostics to the display (monitor if found, otherwise computer's term).
-  -- Highlight the stock ticker line. Pause for keypress so user can read it.
+  -- Use smaller text scale on monitor so more lines fit. Highlight the stock ticker
+  -- line. Pause for keypress so user can read it.
   if #diagLines > 0 then
     -- Clear the display so we have a clean slate
     if onMonitor and monitor and hasFn(monitor, "clear") then
@@ -318,6 +327,9 @@ local function scanAllSides()
     elseif has_term and has_term_clear then
       _G.term.clear()
     end
+
+    -- Smaller text on monitor so more diagnostics fit
+    dispSetTextScale(0.5)
 
     local w, h = dispGetSize()
     local y = 1
@@ -508,6 +520,8 @@ end
 local function drawHeader(title)
   local w, h = dispGetSize()
   dispClear()
+  -- Reset text scale to normal for the main UI
+  dispSetTextScale(1.0)
   dispSetBackgroundColor(colors.black)
   dispSetTextColor(colors.yellow)
   local titleLen = #title
