@@ -253,73 +253,36 @@ local function readlnWithEcho(promptText)
   return line
 end
 
--- Simple key-only reader (no echo). Used for menu navigation and "press any key".
 -- ---------------------------------------------------------------------------
--- KEY CODE → LABEL TABLE (built once at startup)
+-- readkey() — normalises every event to a lowercase string label
 -- ---------------------------------------------------------------------------
 --
 -- CC:T fires keys two ways:
---   1. "key" / "key_down" / "key_up" events with a numeric key code
---      (e.g. keys.enter, keys.up, keys.escape, and sometimes raw letter
---      codes depending on the CC:T build).
---   2. "char" events with a single-character string (e.g. "w", "a", "r").
+--   1. "char" events with a single-character string (e.g. "w", "a", "r").
+--   2. "key" / "key_down" / "key_up" events with a numeric key code from the
+--      keys table (e.g. keys.enter, keys.up, keys.escape).
 --
--- We build a reverse map (number → lowercase label) from the keys table so
--- that every handler only ever sees a string label, regardless of how CC:T
--- fired the event. Letter keys that aren't in the keys table are handled by
--- the "char" path directly.
+-- We build a reverse map (number → lowercase label) from the keys table that
+-- actually exists on this build, so every handler only ever sees a string
+-- label. Letter keys that aren't in the keys table are handled by the "char"
+-- path directly.
+--
+-- Returns:
+--   - a lowercase string label (e.g. "w", "a", "up", "enter", "escape")
+--   - nil  (os.pullEvent returned nil — no more events; caller should stop)
 
-local KEY_LABEL = {}  -- number key-code → lowercase label string
+local KEY_LABEL = {}
 
 do
   local keysTbl = _G.keys
   if type(keysTbl) == "table" then
     for k, v in pairs(keysTbl) do
       if type(k) == "string" and type(v) == "number" then
-        -- Map both the lowercase letter and a few friendly aliases.
-        local label = string.lower(k)
-        KEY_LABEL[v] = label
-        -- Also map some friendly aliases that the keys table doesn't use
-        -- as field names (e.g. "page_up" ←→ "pgup").
-        if label == "page_up"   then KEY_LABEL[v] = "pgup"   end
-        if label == "page_down" then KEY_LABEL[v] = "pgdown" end
-        if label == "left_ctrl" or label == "right_ctrl" then KEY_LABEL[v] = "ctrl" end
-        if label == "left_shift" or label == "right_shift" then KEY_LABEL[v] = "shift" end
-        if label == "left_alt" or label == "right_alt" then KEY_LABEL[v] = "alt" end
+        KEY_LABEL[v] = string.lower(k)
       end
     end
   end
 end
-
--- A small extra map for well-known key codes that CC:T sometimes fires as
--- numeric values without a matching keys.* field. These are best-effort —
--- the codes vary by CC:T build / keyboard layout, so we can't cover every
--- case; the "char" path is the reliable one for letters.
-local EXTRA_KEY = {
-  -- Common function/key codes seen in some CC:T builds. Values are guesses —
-  -- if they don't match your build, the char path still works for letters.
-  [256] = "f1", [257] = "f2", [258] = "f3", [259] = "f4",
-  [260] = "f5", [261] = "f6", [262] = "f7", [263] = "f8",
-  [264] = "f9", [265] = "f10", [266] = "f11", [267] = "f12",
-  [1]   = "left",   [2]   = "up",   [3]   = "right", [4]   = "down",
-}
--- ---------------------------------------------------------------------------
--- readkey() — returns the raw key data, ignoring non-key events
--- ---------------------------------------------------------------------------
---
--- CC:T fires letter keys primarily as "char" events (string "w", "a", …),
--- and also as "key" / "key_down" / "key_up" events with a numeric code
--- for special keys (enter, up, down, escape, …).
---
--- This function loops until it gets something it recognises and returns the
--- raw data. Callers compare against both string and number forms — see the
--- key handlers in main() and showFrogPortList().
---
--- "char" events: return the single-character string (lowercased).
--- "key" / "key_down" / "key_up" events: return the numeric code if it's a
---   number, or the string if the build passes a string.
--- Everything else (timer, etc.): ignore and keep waiting.
--- If os.pullEvent returns nil (no more events): return nil to signal EOF.
 
 local function readkey()
   while true do
@@ -329,14 +292,22 @@ local function readkey()
         return string.lower(data)
       end
     elseif evt == "key" or evt == "key_down" or evt == "key_up" then
-      if type(data) == "number" or (type(data) == "string" and #data == 1) then
-        return data
+      if type(data) == "number" then
+        local label = KEY_LABEL[data]
+        if label then
+          return label
+        end
+        -- Unknown numeric key code — ignore (could be a modifier or
+        -- an unrecognised key on this CC:T build).
+      elseif type(data) == "string" and #data == 1 then
+        -- Some builds pass a single-char string where we'd expect a number.
+        return string.lower(data)
       end
     elseif evt == nil then
-      -- No more events — caller should stop waiting.
+      -- No more events.
       return nil
     end
-    -- Any other event type: ignore and loop.
+    -- Any other event type (timer, etc.): ignore and loop.
   end
 end
 
@@ -1165,22 +1136,17 @@ local function showFrogPortList()
       listNeedsRedraw = false
     end
 
-    -- readkey() can return a string ("w", "a", "r", "b") or a number (a key
-    -- code). Compare against both forms.
+    -- readkey() returns a lowercase string label; compare only against strings.
     local key = readkey()
     if not key then break end
 
-    local isUp    = (type(key) == "string" and (key == "w" or key == "up"))
-                    or (type(key) == "number" and _G.keys and _G.keys.up and key == _G.keys.up)
-    local isDown  = (type(key) == "string" and (key == "s" or key == "down"))
-                    or (type(key) == "number" and _G.keys and _G.keys.down and key == _G.keys.down)
-    local isEsc   = (type(key) == "string" and (key == "q" or key == "escape"))
-                    or (type(key) == "number" and _G.keys and _G.keys.escape and key == _G.keys.escape)
-    local isEnter = (type(key) == "string" and key == "enter")
-                    or (type(key) == "number" and _G.keys and _G.keys.enter and key == _G.keys.enter)
-    local isA     = (type(key) == "string" and key == "a")
-    local isR     = (type(key) == "string" and key == "r")
-    local isB     = (type(key) == "string" and key == "b")
+    local isUp    = (key == "w" or key == "up")
+    local isDown  = (key == "s" or key == "down")
+    local isEsc   = (key == "q" or key == "escape")
+    local isEnter = (key == "enter")
+    local isA     = (key == "a")
+    local isR     = (key == "r")
+    local isB     = (key == "b")
 
     if isEsc or isB or isEnter then
       break
@@ -1358,25 +1324,17 @@ local function main()
     if currentScreen == "main" then
       drawMainMenu()
 
+      -- readkey() returns a lowercase string label; compare only against strings.
       local key = readkey()
       if not key then break end
 
-      -- readkey() can return a string ("w", "a", "r", "b") or a number
-      -- (a key code from a "key"/"key_down"/"key_up" event). Compare against
-      -- both forms. For numbers we check against the keys.* constants when
-      -- they exist on this CC:T build; if a constant doesn't exist the
-      -- string-char path still covers letters.
-      local isUp    = (type(key) == "string" and (key == "w" or key == "up"))
-                      or (type(key) == "number" and _G.keys and _G.keys.up and key == _G.keys.up)
-      local isDown  = (type(key) == "string" and (key == "s" or key == "down"))
-                      or (type(key) == "number" and _G.keys and _G.keys.down and key == _G.keys.down)
-      local isEsc   = (type(key) == "string" and (key == "q" or key == "escape"))
-                      or (type(key) == "number" and _G.keys and _G.keys.escape and key == _G.keys.escape)
-      local isEnter = (type(key) == "string" and key == "enter")
-                      or (type(key) == "number" and _G.keys and _G.keys.enter and key == _G.keys.enter)
-
-      if isEsc then
-        running = false
+      local isUp    = (key == "w" or key == "up")
+      local isDown  = (key == "s" or key == "down")
+      local isEsc   = (key == "q" or key == "escape")
+      local isEnter = (key == "enter")
+      local isA     = (key == "a")
+      local isR     = (key == "r")
+      local isB     = (key == "b")
 
       elseif isEnter then
         if selectedIndex == 1 then
