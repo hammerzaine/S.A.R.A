@@ -26,6 +26,7 @@ local has_term_setCursorPos = has_term and hasFn(_G.term, "setCursorPos")
 local has_term_getCursorPos = has_term and hasFn(_G.term, "getCursorPos")
 local has_term_setTextColor = has_term and hasFn(_G.term, "setTextColor")
 local has_term_flush    = has_term and hasFn(_G.term, "flush")
+local has_term_setTextScale = has_term and hasFn(_G.term, "setTextScale")
 local has_colors        = _G.colors and type(_G.colors) == "table"
 local has_io            = _G.io and type(_G.io.read) == "function"
 
@@ -85,7 +86,6 @@ local function dispWriteLn(text)
     end
 end
 
--- Write to both the monitor and the computer's terminal.
 local function prompt(text)
     dispWrite(text)
     if has_term and has_term_write then
@@ -94,8 +94,6 @@ local function prompt(text)
     end
 end
 
--- Clear both the monitor (if present) and the computer's term.
--- When a monitor is active, the computer term shows a status panel.
 local function dispClear()
   if onMonitor and monitor and hasFn(monitor, "clear") then
     monitor.clear()
@@ -142,7 +140,6 @@ local function dispSetBackgroundColor(c)
 end
 
 -- Set text scale on monitor (1 = default, 0.5 = smaller, 2 = larger).
--- Ignored on computer term (can't change term text scale).
 local function dispSetTextScale(scale)
   if onMonitor and monitor and hasFn(monitor, "setTextScale") then
     monitor.setTextScale(scale)
@@ -219,8 +216,6 @@ local function scanAllSides()
   stockCache = {}
   if not has_peripheral_find then return end
 
-  -- Write diagnostics directly to the computer's term (not the monitor),
-  -- so they aren't wiped by monitor.clear() later.
   local diagLines = {}
 
   -- 1. Scan all sides, wrapping each one to get its type
@@ -242,22 +237,30 @@ local function scanAllSides()
         for k, v in pairs(comp) do
           if type(k) == "string" and type(v) == "function" then
             methods[#methods + 1] = k
+          elseif type(k) == "string" and type(v) == "table" then
+            -- Nested table (like stock.getItemDetail) — note it
+            local nestedMethods = {}
+            for nk, nv in pairs(v) do
+              if type(nk) == "string" and type(nv) == "function" then
+                nestedMethods[#nestedMethods + 1] = nk
+              end
+            end
+            if #nestedMethods > 0 then
+              methods[#methods + 1] = k .. "." .. table.concat(nestedMethods, ",")
+            end
           end
         end
         detectedPeripherals[sideName] = {
-          side = sideName,
-          name = sideName,
-          type = compType,
-          comp = comp,
-          methods = methods,
+          side = sideName, name = sideName, type = compType, comp = comp, methods = methods,
         }
-        diagLines[#diagLines + 1] = "[diag] side " .. sideName .. ": type=" .. compType ..
-          " methods=" .. table.concat(methods, ",")
+        local methodsStr = table.concat(methods, ",")
+        diagLines[#diagLines + 1] = "side " .. sideName ..
+          ": type=" .. compType .. " methods=" .. methodsStr
       else
-        diagLines[#diagLines + 1] = "[diag] side " .. sideName .. ": not a table (type=" .. typ .. ")"
+        diagLines[#diagLines + 1] = "side " .. sideName .. ": not a table (type=" .. typ .. ")"
       end
     else
-      diagLines[#diagLines + 1] = "[diag] side " .. sideName .. ": peripheral.wrap failed or no peripheral"
+      diagLines[#diagLines + 1] = "side " .. sideName .. ": no peripheral"
     end
   end
 
@@ -288,24 +291,44 @@ local function scanAllSides()
           end
         end
       end
-      diagLines[#diagLines + 1] = "[diag] STOCK TICKER: DETECTED as '" .. tickerName ..
+      diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED as '" .. tickerName ..
         "' on side " .. (stockTickerSide or "unknown")
       break
     end
   end
 
   if not stockTicker then
-    diagLines[#diagLines + 1] = "[diag] STOCK TICKER: NOT FOUND by type name — checking methods..."
+    diagLines[#diagLines + 1] = "STOCK TICKER: NOT FOUND by type name — checking methods..."
     for _, sideName in ipairs(sides_to_scan) do
       local comp = detectedPeripherals[sideName] and detectedPeripherals[sideName].comp
       if comp and type(comp) == "table" then
+        -- Check top-level methods
         for _, method in ipairs({ "getStock", "getItems", "getStockItems", "getTickers", "getTicker", "getStockLevels" }) do
           if comp[method] then
             stockTicker = comp
             stockTickerSide = sideName
-            diagLines[#diagLines + 1] = "[diag] STOCK TICKER: FOUND on side " .. sideName ..
+            diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
               " via method '" .. method .. "'"
             break
+          end
+        end
+        -- Check nested methods (stock.getXxx, requestFiltered.getXxx)
+        if not stockTicker then
+          for k, v in pairs(comp) do
+            if type(k) == "string" and type(v) == "table" then
+              for nk, nv in pairs(v) do
+                if type(nk) == "string" and type(nv) == "function" and
+                   (string.find(nk, "stock", 1, true) or
+                    string.find(nk, "Stock", 1, true) or
+                    string.find(nk, "item", 1, true)) then
+                  stockTicker = comp
+                  stockTickerSide = sideName
+                  diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
+                    " via nested '" .. k .. "." .. nk .. "'"
+                  break
+                end
+              end
+            end
           end
         end
       end
@@ -314,33 +337,27 @@ local function scanAllSides()
   end
 
   if not stockTicker then
-    diagLines[#diagLines + 1] = "[diag] STOCK TICKER: NOT FOUND — see above for what each side detected"
+    diagLines[#diagLines + 1] = "STOCK TICKER: NOT FOUND — see above for what each side detected"
   end
 
-  -- Print diagnostics to the display (monitor if found, otherwise computer's term).
-  -- Use smaller text scale on monitor so more lines fit. Highlight the stock ticker
-  -- line. Pause for keypress so user can read it.
+  -- Print diagnostics to the display and WAIT for keypress
   if #diagLines > 0 then
-    -- Clear the display so we have a clean slate
     if onMonitor and monitor and hasFn(monitor, "clear") then
       monitor.clear()
     elseif has_term and has_term_clear then
       _G.term.clear()
     end
 
-    -- Smaller text on monitor so more diagnostics fit
     dispSetTextScale(0.5)
 
     local w, h = dispGetSize()
     local y = 1
 
-    -- Title
     dispSetTextColor(colors.yellow)
     dispSetCursorPos(1, y)
     dispWrite("=== PERIPHERAL SCAN ===")
     y = y + 1
 
-    -- Each side line
     dispSetTextColor(colors.white)
     for _, line in ipairs(diagLines) do
       if y > h then break end
@@ -356,14 +373,12 @@ local function scanAllSides()
       y = y + 1
     end
 
-    -- Prompt
     if y <= h then
       dispSetTextColor(colors.gray)
       dispSetCursorPos(1, y)
       dispWrite("Press any key to continue...")
     end
 
-    -- Flush to both displays
     if has_term and has_term_write then
       _G.term.clear()
       _G.term.setCursorPos(1, 1)
@@ -385,142 +400,211 @@ local function scanAllSides()
       if has_term_flush then _G.term.flush() end
     end
 
-    -- Wait for keypress
     local evt = os.pullEventRaw("key")
   end
 end
 
--- Read stock levels from the ticker peripheral.
--- Tries multiple API call patterns since the exact interface varies.
+-- ---------------------------------------------------------------------------
+-- READ STOCK FROM TICKER
+-- Supports: getItems, getItem, getAllItems, getStock, getStockLevels,
+--           getStockItems, getItemDetail, requestFiltered.getStockItemDetail.list
+-- ---------------------------------------------------------------------------
+
 local function readStockFromTicker()
   stockCache = {}
   if not stockTicker then return end
 
-  local function tryGetItems()
-    -- Pattern 1: getItems() returns { {name=id, count=n} }
-    if stockTicker.getItems then
-      local ok, items = pcall(stockTicker.getItems)
-      if ok and items and type(items) == "table" then
-        for _, item in ipairs(items) do
-          local id = item.id or item.name or item.displayName or ""
-          local count = item.count or item.size or item.amount or 0
-          if id ~= "" and count and count > 0 then
-            stockCache[id] = (stockCache[id] or 0) + count
-          end
-        end
-        if next(stockCache) then return true end
-      end
+  local function addItem(id, count)
+    if id ~= "" and count and count > 0 then
+      stockCache[id] = (stockCache[id] or 0) + count
     end
-    -- Pattern 1b: getItem() — singular, may return single item or list
-    if stockTicker.getItem then
-      local ok, result = pcall(stockTicker.getItem)
-      if ok and result then
-        if type(result) == "table" then
-          if result.count and result.name then
-            -- Single item: { name = "...", count = N }
-            stockCache[result.name] = (stockCache[result.name] or 0) + result.count
-          elseif result[1] and type(result[1]) == "table" then
-            -- Array of items
-            for _, item in ipairs(result) do
-              local id = item.id or item.name or item.displayName or ""
-              local count = item.count or item.size or item.amount or 1
-              if id ~= "" and count and count > 0 then
-                stockCache[id] = (stockCache[id] or 0) + count
-              end
-            end
-          elseif result.id or result.name then
-            -- Single item table with id/name fields
-            local id = result.id or result.name or result.displayName or ""
-            local count = result.count or result.size or result.amount or 1
-            if id ~= "" and count and count > 0 then
-              stockCache[id] = (stockCache[id] or 0) + count
-            end
-          end
-          if next(stockCache) then return true end
-        end
-      end
-    end
-    -- Pattern 2: getAllItems() 
-    if stockTicker.getAllItems then
-      local ok, items = pcall(stockTicker.getAllItems)
-      if ok and items and type(items) == "table" then
-        for _, item in ipairs(items) do
-          local id = item.id or item.name or item.displayName or ""
-          local count = item.count or item.size or item.amount or 0
-          if id ~= "" and count and count > 0 then
-            stockCache[id] = (stockCache[id] or 0) + count
-          end
-        end
-        if next(stockCache) then return true end
-      end
-    end
-    -- Pattern 3: getStock() or getStockLevels()
-    for _, fnName in ipairs({ "getStock", "getStockLevels", "getStockItems" }) do
-      if stockTicker[fnName] then
-        local ok, result = pcall(stockTicker[fnName])
-        if ok and result and type(result) == "table" then
-          -- Could be { itemName = count } or { {name, count} }
-          if result[1] and type(result[1]) == "table" then
-            -- Array of items
-            for _, item in ipairs(result) do
-              local id = item.id or item.name or item[1] or ""
-              local count = item.count or item[2] or item.amount or 0
-              if id ~= "" and count and count > 0 then
-                stockCache[id] = (stockCache[id] or 0) + count
-              end
-            end
-          else
-            -- Key-value table: name -> count
-            for name, count in pairs(result) do
-              if type(count) == "number" and count > 0 then
-                stockCache[name] = (stockCache[name] or 0) + count
-              end
-            end
-          end
-          if next(stockCache) then return true end
-        end
-      end
-    end
-    -- Pattern 4: get() returns a single item or stock overview
-    if stockTicker.get then
-      local ok, result = pcall(stockTicker.get)
-      if ok and result then
-        if type(result) == "table" then
-          if result.count and result.name then
-            stockCache[result.name] = result.count
-          elseif result[1] then
-            for _, item in ipairs(result) do
-              local id = item.id or item.name or ""
-              local count = item.count or item.size or 0
-              if id ~= "" and count and count > 0 then
-                stockCache[id] = (stockCache[id] or 0) + count
-              end
-            end
-          end
-          if next(stockCache) then return true end
-        end
-      end
-    end
-    return false
   end
 
-  if not tryGetItems() then
-    -- Fallback: try to read as a monitor (some stock tickers are monitor peripherals)
-    if stockTicker.setTextColor and stockTicker.write then
-      -- It's a monitor-like peripheral; can't read stock from it directly
-      print("[diag] stock ticker: appears to be a display-only peripheral")
+  -- Pattern 1: getItems()
+  if stockTicker.getItems then
+    local ok, items = pcall(stockTicker.getItems)
+    if ok and items and type(items) == "table" then
+      for _, item in ipairs(items) do
+        addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+      end
+      if next(stockCache) then return end
+    end
+  end
+
+  -- Pattern 1b: getItem()
+  if stockTicker.getItem then
+    local ok, result = pcall(stockTicker.getItem)
+    if ok and result then
+      if type(result) == "table" then
+        if result.count and result.name then
+          addItem(result.name, result.count)
+        elseif result[1] and type(result[1]) == "table" then
+          for _, item in ipairs(result) do
+            addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 1)
+          end
+        elseif result.id or result.name then
+          addItem(result.id or result.name or result.displayName or "", result.count or result.size or result.amount or 1)
+        end
+      end
+      if next(stockCache) then return end
+    end
+  end
+
+  -- Pattern 2: getAllItems()
+  if stockTicker.getAllItems then
+    local ok, items = pcall(stockTicker.getAllItems)
+    if ok and items and type(items) == "table" then
+      for _, item in ipairs(items) do
+        addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+      end
+      if next(stockCache) then return end
+    end
+  end
+
+  -- Pattern 3: getStock / getStockLevels / getStockItems
+  for _, fnName in ipairs({ "getStock", "getStockLevels", "getStockItems" }) do
+    if stockTicker[fnName] then
+      local ok, result = pcall(stockTicker[fnName])
+      if ok and result and type(result) == "table" then
+        if result[1] and type(result[1]) == "table" then
+          for _, item in ipairs(result) do
+            addItem(item.id or item.name or item[1] or "", item.count or item[2] or item.amount or 0)
+          end
+        else
+          for name, count in pairs(result) do
+            if type(count) == "number" and count > 0 then
+              stockCache[name] = (stockCache[name] or 0) + count
+            end
+          end
+        end
+        if next(stockCache) then return end
+      end
+    end
+  end
+
+  -- Pattern 4: get()
+  if stockTicker.get then
+    local ok, result = pcall(stockTicker.get)
+    if ok and result then
+      if type(result) == "table" then
+        if result.count and result.name then
+          addItem(result.name, result.count)
+        elseif result[1] then
+          for _, item in ipairs(result) do
+            addItem(item.id or item.name or "", item.count or item.size or 0)
+          end
+        end
+      end
+      if next(stockCache) then return end
+    end
+  end
+
+  -- Pattern 5: getItemDetail() — may return a single item detail table
+  if stockTicker.getItemDetail then
+    local ok, result = pcall(stockTicker.getItemDetail)
+    if ok and result then
+      if type(result) == "table" then
+        -- Could be { items = {...} } or a flat list or a single item
+        if result.items and type(result.items) == "table" then
+          for _, item in ipairs(result.items) do
+            addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+          end
+        elseif result[1] and type(result[1]) == "table" then
+          for _, item in ipairs(result) do
+            addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+          end
+        elseif result.id or result.name then
+          addItem(result.id or result.name or result.displayName or "", result.count or result.size or result.amount or 1)
+        end
+      end
+      if next(stockCache) then return end
+    end
+  end
+
+  -- Pattern 6: Nested access — requestFiltered.getStockItemDetail.list
+  -- e.g. stock.getItemDetail or requestFiltered.getStockItemDetail.list
+  for subKey, subTbl in pairs(stockTicker) do
+    if type(subTbl) == "table" then
+      for method in pairs(subTbl) do
+        if type(method) == "string" and
+           (string.find(method, "stock", 1, true) or
+            string.find(method, "Stock", 1, true) or
+            string.find(method, "item", 1, true) or
+            string.find(method, "Item", 1, true)) then
+          local ok, result = pcall(subTbl[method])
+          if ok and result then
+            if type(result) == "table" then
+              if result.items and type(result.items) == "table" then
+                for _, item in ipairs(result.items) do
+                  addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+                end
+              elseif result[1] and type(result[1]) == "table" then
+                for _, item in ipairs(result) do
+                  addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+                end
+              elseif result.count and result.name then
+                addItem(result.name, result.count)
+              elseif result.id or result.name then
+                addItem(result.id or result.name or result.displayName or "", result.count or result.size or result.amount or 1)
+              else
+                -- Maybe it's a key-value mapping: { itemName = count }
+                for name, count in pairs(result) do
+                  if type(count) == "number" and count > 0 then
+                    stockCache[name] = (stockCache[name] or 0) + count
+                  end
+                end
+              end
+              if next(stockCache) then return end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- Pattern 7: requestFiltered directly on ticker
+  if stockTicker.requestFiltered and type(stockTicker.requestFiltered) == "table" then
+    for method in pairs(stockTicker.requestFiltered) do
+      if type(method) == "string" and
+         (string.find(method, "stock", 1, true) or
+          string.find(method, "Stock", 1, true) or
+          string.find(method, "item", 1, true) or
+          string.find(method, "list", 1, true)) then
+        local ok, result = pcall(stockTicker.requestFiltered[method])
+        if ok and result then
+          if type(result) == "table" then
+            if result.items and type(result.items) == "table" then
+              for _, item in ipairs(result.items) do
+                addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+              end
+            elseif result[1] and type(result[1]) == "table" then
+              for _, item in ipairs(result) do
+                addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
+              end
+            elseif result.id or result.name then
+              addItem(result.id or result.name or result.displayName or "", result.count or result.size or result.amount or 1)
+            else
+              for name, count in pairs(result) do
+                if type(count) == "number" and count > 0 then
+                  stockCache[name] = (stockCache[name] or 0) + count
+                end
+              end
+            end
+            if next(stockCache) then return end
+          end
+        end
+      end
     end
   end
 end
 
 -- ---------------------------------------------------------------------------
--- MENU RENDERING (defined BEFORE screen functions that call them)
+-- MENU RENDERING
 -- ---------------------------------------------------------------------------
 
 local function drawHeader(title)
   local w, h = dispGetSize()
   dispClear()
-  -- Reset text scale to normal for the main UI
   dispSetTextScale(1.0)
   dispSetBackgroundColor(colors.black)
   dispSetTextColor(colors.yellow)
@@ -566,7 +650,7 @@ local function drawMainMenu()
     y = y + 1
   end
 
-  -- Stock overview (read from ticker if available)
+  -- Stock overview
   y = y + 1
   dispSetTextColor(colors.white)
   dispSetBackgroundColor(colors.black)
@@ -843,6 +927,13 @@ end
 -- ---------------------------------------------------------------------------
 -- MAIN LOOP
 -- ---------------------------------------------------------------------------
+
+local function countTable(t)
+  if type(t) ~= "table" then return 0 end
+  local c = 0
+  for _ in pairs(t) do c = c + 1 end
+  return c
+end
 
 local function main()
   scanAllSides()
