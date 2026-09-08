@@ -201,38 +201,107 @@ local selectedIndex = 1
 local currentScreen = "main"
 local detectedPeripherals = {}
 local stockTicker = nil
-local stockCache = {}  -- cached stock levels: { itemName = count }
+local stockTickerSide = nil
+local stockCache = {}
 
 local function scanAllSides()
   detectedPeripherals = {}
   stockTicker = nil
+  stockTickerSide = nil
   stockCache = {}
   if not has_peripheral_find then return end
+
+  -- 1. Scan all sides, wrapping each one to get its type
   local sides_to_scan = { "left", "right", "front", "back", "top", "bottom" }
   for _, sideName in ipairs(sides_to_scan) do
-    local ok, comp = pcall(function() return _G.peripheral.find(sideName) end)
-    if ok and comp and comp.type and comp.type ~= "none" then
-      detectedPeripherals[sideName] = {
-        side = sideName, name = sideName, type = comp.type, comp = comp,
-      }
+    local ok, comp = pcall(function() return _G.peripheral.wrap(sideName) end)
+    if ok and comp then
+      local typ = type(comp)
+      if typ == "table" then
+        -- Try to get type via component.getType() or check known fields
+        local compType = "unknown"
+        if hasFn(comp, "getType") then
+          compType = comp.getType()
+        elseif hasFn(comp, "type") then
+          compType = comp.type
+        elseif hasFn(comp, "getName") then
+          compType = comp.getName()
+        end
+        -- Also check by looking at what methods it has
+        local methods = {}
+        for k, v in pairs(comp) do
+          if type(k) == "string" and type(v) == "function" then
+            methods[#methods + 1] = k
+          end
+        end
+        detectedPeripherals[sideName] = {
+          side = sideName,
+          name = sideName,
+          type = compType,
+          comp = comp,
+          methods = methods,
+        }
+        print("[diag] side " .. sideName .. ": type=" .. compType .. " methods=" .. table.concat(methods, ","))
+      end
     end
   end
-  -- Try to find a stock ticker peripheral (Create stock ticker / item display)
+
+  -- 2. Search for stock ticker by type name across ALL sides
   local tickerNames = {
     "stock_ticker", "stockticker", "tickertape", "stock_display",
     "create:stock_ticker", "create:stockticker", "item_display",
-    "stock", "ticker", "create:ticker",
+    "stock", "ticker", "create:ticker", "create:stock_ticker",
+    "create:stockticker", "stocktickers", "ticker_minecolonies",
+    "minecolonies:ticker", "stockpanel", "itembar", "bar",
   }
-  for _, name in ipairs(tickerNames) do
-    local ok, comp = pcall(function() return _G.peripheral.find(name) end)
+  for _, tickerName in ipairs(tickerNames) do
+    local ok, comp = pcall(function() return _G.peripheral.find(tickerName) end)
     if ok and comp then
       stockTicker = comp
-      print("[diag] stock ticker: DETECTED as '" .. name .. "'")
+      -- Figure out which side it's on
+      for sideName, p in pairs(detectedPeripherals) do
+        if p.comp == comp then
+          stockTickerSide = sideName
+          break
+        end
+      end
+      if not stockTickerSide then
+        -- Fallback: wrap each side and compare
+        for _, sideName in ipairs(sides_to_scan) do
+          local w = _G.peripheral.wrap(sideName)
+          if w == comp then
+            stockTickerSide = sideName
+            break
+          end
+        end
+      end
+      print("[diag] stock ticker: DETECTED as '" .. tickerName .. "' on side " .. (stockTickerSide or "unknown"))
       break
     end
   end
+
   if not stockTicker then
-    print("[diag] stock ticker: NOT FOUND")
+    print("[diag] stock ticker: NOT FOUND — trying all sides individually")
+    -- 3. Brute force: check every side for anything that looks like a stock ticker
+    for _, sideName in ipairs(sides_to_scan) do
+      local comp = detectedPeripherals[sideName] and detectedPeripherals[sideName].comp
+      if comp and type(comp) == "table" then
+        -- Check if it has stock-related methods
+        for _, method in ipairs({ "getStock", "getItems", "getStockItems", "getTickers", "getTicker" }) do
+          if comp[method] then
+            stockTicker = comp
+            stockTickerSide = sideName
+            print("[diag] stock ticker: FOUND on side " .. sideName .. " via method '" .. method .. "'")
+            break
+          end
+        end
+      end
+      if stockTicker then break end
+    end
+  end
+
+  if not stockTicker then
+    print("[diag] stock ticker: NOT FOUND — check what side it's on and what type it registers as")
   end
 end
 
