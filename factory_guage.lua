@@ -1,12 +1,3 @@
--- factory_guage.lua
--- CC:Tweaked script — simplified menu-driven factory gauge
---
--- CONTROLS (keyboard goes through the COMPUTER, not the monitor):
---   W/Up        — navigate up
---   S/Down      — navigate down
---   Enter       — select highlighted item
---   Q/Esc       — back / quit
-
 print("factory_guage: starting...")
 
 -- ---------------------------------------------------------------------------
@@ -262,7 +253,7 @@ local function scanAllSides()
     end
   end
 
-  -- 2. Search for stock ticker by type name OR direct peripheral property
+  -- 2. Search for stock ticker by type name
   local tickerNames = {
     "stock_ticker", "stockticker", "tickertape", "stock_display",
     "create:stock_ticker", "create:stockticker", "item_display",
@@ -295,62 +286,59 @@ local function scanAllSides()
     end
   end
 
-  -- 2b. Direct peripheral.stock property check (some CC:T versions expose it this way)
-  if not stockTicker and _G.peripheral and _G.peripheral.stock and type(_G.peripheral.stock) == "table" then
-    stockTicker = _G.peripheral.stock
-    stockTickerSide = "indirect"
-    diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED via peripheral.stock (direct property)"
+  -- 2b. Direct peripheral.stock property check
+  if not stockTicker and _G.peripheral and _G.peripheral.stock then
+    local stockProp = _G.peripheral.stock
+    if type(stockProp) == "table" then
+      stockTicker = stockProp
+      stockTickerSide = "indirect"
+      diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED via peripheral.stock (direct property)"
+    elseif type(stockProp) == "string" then
+      local ok, comp = pcall(function() return _G.peripheral.find(stockProp) end)
+      if ok and comp then
+        stockTicker = comp
+        stockTickerSide = "indirect"
+        diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED via peripheral.stock type name ('" .. stockProp .. "')"
+      end
+    end
   end
 
+  -- 2c. Direct side-by-side search: wrap every side and check for stock methods
   if not stockTicker then
-    diagLines[#diagLines + 1] = "STOCK TICKER: NOT FOUND by type name — checking methods..."
     for _, sideName in ipairs(sides_to_scan) do
-      local comp = detectedPeripherals[sideName] and detectedPeripherals[sideName].comp
-      if comp and type(comp) == "table" then
-        -- Check flat methods first
-        for _, method in ipairs({ "getStock", "getItems", "getStockItems", "getTickers", "getTicker", "getStockLevels" }) do
-          if comp[method] then
-            stockTicker = comp
-            stockTickerSide = sideName
-            diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
-              " via method '" .. method .. "'"
-            break
+      local ok, comp = pcall(function() return _G.peripheral.wrap(sideName) end)
+      if not ok or not comp or type(comp) ~= "table" then
+        if _G.peripheral and type(_G.peripheral) == "table" then
+          local sideProp = _G.peripheral[sideName]
+          if type(sideProp) == "table" then
+            comp = sideProp
           end
-        end
-        -- Search nested tables up to 3 levels deep for stock/item/list methods
-        if not stockTicker then
-          local function searchNested(tbl, depth, path)
-            if depth > 3 then return false end
-            for k, v in pairs(tbl) do
-              if type(k) == "string" and type(v) == "function" then
-                local lower = string.lower(k)
-                if string.find(lower, "stock", 1, true) or
-                   string.find(lower, "item", 1, true) or
-                   string.find(lower, "list", 1, true) or
-                   string.find(lower, "detail", 1, true) then
-                  stockTicker = comp
-                  stockTickerSide = sideName
-                  diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
-                    " via '" .. path .. "." .. k .. "'"
-                  return true
-                end
-              elseif type(k) == "string" and type(v) == "table" then
-                if searchNested(v, depth + 1, path .. "." .. k) then
-                  return true
-                end
-              end
-            end
-            return false
-          end
-          searchNested(comp, 1, "peripheral")
         end
       end
-      if stockTicker then break end
+      if comp and type(comp) == "table" then
+        if comp.stock and type(comp.stock) == "table" and
+           comp.stock.getItemDetail and type(comp.stock.getItemDetail) == "function" then
+          stockTicker = comp
+          stockTickerSide = sideName
+          diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
+            " via comp.stock.getItemDetail"
+          break
+        end
+        if comp.requestFiltered and type(comp.requestFiltered) == "table" and
+           comp.requestFiltered.getStockItemDetail and type(comp.requestFiltered.getStockItemDetail) == "table" and
+           comp.requestFiltered.getStockItemDetail.list and type(comp.requestFiltered.getStockItemDetail.list) == "function" then
+          stockTicker = comp
+          stockTickerSide = sideName
+          diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
+            " via comp.requestFiltered.getStockItemDetail.list"
+          break
+        end
+      end
     end
   end
 
   if not stockTicker then
-    diagLines[#diagLines + 1] = "STOCK TICKER: NOT FOUND — see above for what each side detected"
+    diagLines[#diagLines + 1] = "STOCK TICKER: NOT FOUND — tried type names, peripheral.stock, and side-by-side scan"
   end
 
   -- Print diagnostics to the display and WAIT for keypress
@@ -481,25 +469,14 @@ local function scanAllSides()
 end
 
 -- ---------------------------------------------------------------------------
--- READ STOCK FROM TICKER
--- Supports Create stock ticker patterns. The user's ticker exposes:
---   stock.getItemDetail
---   requestFiltered.getStockItemDetail.list
--- Stock reading results are printed to the computer's terminal via print()
--- so you can see exactly what the methods return.
+-- READ STOCK FROM TICKER — comprehensive probing
 -- ---------------------------------------------------------------------------
 
 local function readStockFromTicker()
   stockCache = {}
   if not stockTicker then return end
 
-  local function addItem(id, count)
-    if id ~= "" and count and count > 0 then
-      stockCache[id] = (stockCache[id] or 0) + count
-    end
-  end
-
-  -- Debug helper: prints to computer's term so user can see what methods return
+  -- Debug helper: prints to computer's term
   local function debugPrint(label, result)
     local desc
     if type(result) == "table" then
@@ -508,8 +485,7 @@ local function readStockFromTicker()
       for k, v in pairs(result) do
         count = count + 1
         if count <= 5 then
-          local vtype = type(v)
-          if vtype == "table" then
+          if type(v) == "table" then
             local subkeys = {}
             local subc = 0
             for sk, sv in pairs(v) do
@@ -534,98 +510,242 @@ local function readStockFromTicker()
     print("[stock-debug] " .. label .. ": " .. desc)
   end
 
-  -- Pattern A: stock.getItemDetail(itemId)
-  -- May need an item ID argument, or returns all items with no arg
-  if stockTicker.stock and type(stockTicker.stock) == "table" then
-    if stockTicker.stock.getItemDetail and type(stockTicker.stock.getItemDetail) == "function" then
-      -- Try with no argument first
-      local ok, result = pcall(stockTicker.stock.getItemDetail)
-      if ok and result then
-        debugPrint("stock.getItemDetail()", result)
-        if result and type(result) == "table" then
-          if result.items and type(result.items) == "table" then
-            for _, item in ipairs(result.items) do
-              addItem(item.id or item.name or item.displayName or "",
-                      item.count or item.size or item.amount or 0)
+  -- Probe function: try calling a function, report result
+  local function tryCall(fn, label, ...)
+    if type(fn) ~= "function" then
+      print("[stock-probe] " .. label .. " (not a function)")
+      return false, nil
+    end
+    local ok, result = pcall(fn, ...)
+    if not ok then
+      print("[stock-probe] " .. label .. " FAILED: " .. tostring(result))
+      return false, nil
+    end
+    print("[stock-probe] " .. label .. " OK — type: " .. type(result))
+    if type(result) == "table" then
+      local keys = {}
+      local kcount = 0
+      for k, v in pairs(result) do
+        kcount = kcount + 1
+        if kcount <= 8 then
+          local vdesc
+          if type(v) == "table" then
+            local sub = {}
+            local sc = 0
+            for sk, sv in pairs(v) do
+              sc = sc + 1; if sc <= 3 then sub[#sub + 1] = sk end
             end
-            if next(stockCache) then return end
-          elseif result[1] and type(result[1]) == "table" then
-            for _, item in ipairs(result) do
-              addItem(item.id or item.name or item.displayName or "",
-                      item.count or item.size or item.amount or 0)
-            end
-            if next(stockCache) then return end
-          elseif result.id or result.name then
-            addItem(result.id or result.name or result.displayName or "",
-                    result.count or result.size or result.amount or 1)
-            if next(stockCache) then return end
+            vdesc = "{" .. table.concat(sub, ",") .. "}"
+          elseif type(v) == "string" then
+            vdesc = "\"" .. v .. "\""
+          else
+            vdesc = tostring(v)
           end
+          keys[#keys + 1] = k .. "=" .. vdesc
         end
       end
+      if kcount > 8 then keys[#keys + 1] = "...(" .. kcount .. " keys)" end
+      print("[stock-probe]   keys: " .. table.concat(keys, ", "))
+    end
+    return true, result
+  end
 
-      -- Try with common item ID arguments
-      local testItems = { "minecraft:stick", "minecraft:planks", "minecraft:cobble" }
-      for _, testId in ipairs(testItems) do
-        if not next(stockCache) then
-          local ok, result = pcall(stockTicker.stock.getItemDetail, testId)
-          if ok and result and type(result) == "table" then
-            debugPrint("stock.getItemDetail(" .. testId .. ")", result)
-            if result.count then
-              addItem(testId, result.count)
-              if next(stockCache) then return end
-            elseif result.items and type(result.items) == "table" then
-              for _, item in ipairs(result.items) do
-                addItem(item.id or item.name or "", item.count or item.size or item.amount or 0)
+  local function addItem(id, count)
+    if id ~= "" and count and count > 0 then
+      stockCache[id] = (stockCache[id] or 0) + count
+      print("[stock-probe]   added: " .. id .. " = " .. count .. " (total: " .. stockCache[id] .. ")")
+    end
+  end
+
+  -- First: enumerate all callable methods for debugging
+  print("[stock-probe] === STOCK TICKER PROBE ===")
+  print("[stock-probe] type of stockTicker: " .. type(stockTicker))
+
+  -- Enumerate all functions on the ticker (top-level + nested)
+  local seen = {}
+  local function listFuncs(tbl, prefix)
+    if type(tbl) ~= "table" or seen[tbl] then return end
+    seen[tbl] = true
+    for k, v in pairs(tbl) do
+      local full = prefix and (prefix .. "." .. k) or k
+      if type(v) == "function" then
+        print("[stock-probe] fn: " .. full)
+      elseif type(v) == "table" then
+        print("[stock-probe] tbl: " .. full)
+        listFuncs(v, full)
+      end
+    end
+  end
+  listFuncs(stockTicker, nil)
+
+  -- Collect candidate functions
+  local candidates = {}
+  for k, v in pairs(stockTicker) do
+    if type(k) == "string" and type(v) == "function" then
+      if string.lower(k):find("stock") or string.lower(k):find("item") or string.lower(k):find("list") then
+        table.insert(candidates, { path = k, fn = v })
+      end
+    elseif type(k) == "string" and type(v) == "table" then
+      local lower = string.lower(k)
+      if lower:find("stock") or lower:find("request") or lower:find("filter") or lower:find("item") then
+        for nk, nv in pairs(v) do
+          if type(nk) == "string" and type(nv) == "function" then
+            table.insert(candidates, { path = k .. "." .. nk, fn = nv })
+          elseif type(nk) == "string" and type(nv) == "table" then
+            for nnk, nvn in pairs(nv) do
+              if type(nnk) == "string" and type(nvn) == "function" then
+                table.insert(candidates, { path = k .. "." .. nk .. "." .. nnk, fn = nvn })
               end
-              if next(stockCache) then return end
-            elseif result.id or result.name then
-              addItem(result.id or result.name or "", result.count or result.size or result.amount or 1)
-              if next(stockCache) then return end
             end
           end
         end
       end
     end
-
-    -- Pattern B: requestFiltered.getStockItemDetail.list
-    if stockTicker.requestFiltered and type(stockTicker.requestFiltered) == "table" then
-      if stockTicker.requestFiltered.getStockItemDetail and
-         type(stockTicker.requestFiltered.getStockItemDetail) == "table" then
-        if stockTicker.requestFiltered.getStockItemDetail.list and
-           type(stockTicker.requestFiltered.getStockItemDetail.list) == "function" then
-          local ok, result = pcall(stockTicker.requestFiltered.getStockItemDetail.list)
-          if ok and result then
-            debugPrint("requestFiltered.getStockItemDetail.list()", result)
-            if type(result) == "table" then
-              if result.items and type(result.items) == "table" then
-                for _, item in ipairs(result.items) do
-                  addItem(item.id or item.name or item.displayName or "",
-                          item.count or item.size or item.amount or 0)
-                end
-                if next(stockCache) then return end
-              elseif result[1] and type(result[1]) == "table" then
-                for _, item in ipairs(result) do
-                  addItem(item.id or item.name or item.displayName or "",
-                          item.count or item.size or item.amount or 0)
-                end
-                if next(stockCache) then return end
-              elseif result.id or result.name then
-                addItem(result.id or result.name or result.displayName or "",
-                        result.count or result.size or result.amount or 1)
-                if next(stockCache) then return end
-              else
-                -- Key-value: { itemName = count }
-                for name, count in pairs(result) do
-                  if type(count) == "number" and count > 0 then
-                    stockCache[name] = (stockCache[name] or 0) + count
-                  end
-                end
-                if next(stockCache) then return end
+  end
+  -- Also check .stock sub-table
+  if stockTicker.stock and type(stockTicker.stock) == "table" then
+    for k, v in pairs(stockTicker.stock) do
+      if type(k) == "string" and type(v) == "function" then
+        table.insert(candidates, { path = "stock." .. k, fn = v })
+      elseif type(k) == "string" and type(v) == "table" then
+        for nk, nv in pairs(v) do
+          if type(nk) == "string" and type(nv) == "function" then
+            table.insert(candidates, { path = "stock." .. k .. "." .. nk, fn = nv })
+          elseif type(nk) == "string" and type(nv) == "table" then
+            for nnk, nvn in pairs(nv) do
+              if type(nnk) == "string" and type(nvn) == "function" then
+                table.insert(candidates, { path = "stock." .. k .. "." .. nk .. "." .. nnk, fn = nvn })
               end
             end
           end
         end
       end
+    end
+  end
+  -- Also check .requestFiltered sub-table
+  if stockTicker.requestFiltered and type(stockTicker.requestFiltered) == "table" then
+    for k, v in pairs(stockTicker.requestFiltered) do
+      if type(k) == "string" and type(v) == "function" then
+        table.insert(candidates, { path = "requestFiltered." .. k, fn = v })
+      elseif type(k) == "string" and type(v) == "table" then
+        for nk, nv in pairs(v) do
+          if type(nk) == "string" and type(nv) == "function" then
+            table.insert(candidates, { path = "requestFiltered." .. k .. "." .. nk, fn = nv })
+          elseif type(nk) == "string" and type(nv) == "table" then
+            for nnk, nvn in pairs(nv) do
+              if type(nnk) == "string" and type(nvn) == "function" then
+                table.insert(candidates, { path = "requestFiltered." .. k .. "." .. nk .. "." .. nnk, fn = nvn })
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  print("[stock-probe] candidates:")
+  for _, c in ipairs(candidates) do
+    print("[stock-probe]   " .. c.path)
+    local ok, result = tryCall(c.fn, c.path)
+    if ok and result and type(result) == "table" then
+      -- Try to extract items
+      if result.items and type(result.items) == "table" then
+        for _, item in ipairs(result.items) do
+          local id = item.id or item.name or item.displayName or item[1] or ""
+          local count = item.count or item.size or item.amount or item[2] or 0
+          addItem(id, count)
+        end
+        if next(stockCache) then
+          print("[stock-probe] extracted items, done.")
+          return
+        end
+      elseif result[1] and type(result[1]) == "table" then
+        for _, item in ipairs(result) do
+          local id = item.id or item.name or item.displayName or item[1] or ""
+          local count = item.count or item.size or item.amount or item[2] or 0
+          addItem(id, count)
+        end
+        if next(stockCache) then
+          print("[stock-probe] extracted items, done.")
+          return
+        end
+      elseif result.id or result.name then
+        local id = result.id or result.name or result.displayName or ""
+        local count = result.count or result.size or result.amount or 1
+        addItem(id, count)
+        if next(stockCache) then
+          print("[stock-probe] extracted item, done.")
+          return
+        end
+      else
+        -- key-value?
+        for name, count in pairs(result) do
+          if type(count) == "number" and count > 0 then
+            addItem(name, count)
+          end
+        end
+        if next(stockCache) then
+          print("[stock-probe] extracted items via key-value, done.")
+          return
+        end
+      end
+    end
+  end
+
+  -- Try flat methods on stockTicker itself
+  for _, fnName in ipairs({ "getStock", "getStockLevels", "getStockItems", "getItems", "getItem", "getAllItems" }) do
+    if stockTicker[fnName] and type(stockTicker[fnName]) == "function" then
+      local ok, result = tryCall(stockTicker[fnName], fnName .. "()")
+      if ok and result and type(result) == "table" then
+        if result.items and type(result.items) == "table" then
+          for _, item in ipairs(result.items) do
+            local id = item.id or item.name or item.displayName or item[1] or ""
+            local count = item.count or item.size or item.amount or item[2] or 0
+            addItem(id, count)
+          end
+          if next(stockCache) then
+            print("[stock-probe] extracted from " .. fnName .. "() items, done.")
+            return
+          end
+        elseif result[1] and type(result[1]) == "table" then
+          for _, item in ipairs(result) do
+            local id = item.id or item.name or item.displayName or item[1] or ""
+            local count = item.count or item.size or item.amount or item[2] or 0
+            addItem(id, count)
+          end
+          if next(stockCache) then
+            print("[stock-probe] extracted from " .. fnName .. "() array, done.")
+            return
+          end
+        elseif result.id or result.name then
+          local id = result.id or result.name or result.displayName or ""
+          local count = result.count or result.size or result.amount or 1
+          addItem(id, count)
+          if next(stockCache) then
+            print("[stock-probe] extracted from " .. fnName .. "() single, done.")
+            return
+          end
+        else
+          for name, count in pairs(result) do
+            if type(count) == "number" and count > 0 then
+              addItem(name, count)
+            end
+          end
+          if next(stockCache) then
+            print("[stock-probe] extracted from " .. fnName .. "() key-value, done.")
+            return
+          end
+        end
+      end
+    end
+  end
+
+  if not next(stockCache) then
+    print("[stock-probe] ERROR: no stock data extracted from any method")
+  else
+    print("[stock-probe] stockCache:")
+    for id, count in pairs(stockCache) do
+      print("[stock-probe]   " .. id .. ": " .. count)
     end
   end
 end
