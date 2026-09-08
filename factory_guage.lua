@@ -151,37 +151,109 @@ end
 -- INPUT
 -- ---------------------------------------------------------------------------
 
-local function readln()
-  if has_io then
-    local line = _G.io.read("*l")
-    return line
+-- ---------------------------------------------------------------------------
+-- INPUT — with screen echo
+-- ---------------------------------------------------------------------------
+
+-- Read a line of text from the keyboard, echoing characters to the display
+-- as they are typed (like a normal terminal prompt). Backspace removes the
+-- last character and erases it from screen. Enter finishes the line.
+--
+-- On a monitor, echoing uses the monitor display. The computer's term always
+-- gets a mirror so the user sees what they type even when looking at the
+-- computer GUI.
+--
+-- Returns the typed line (string), or nil if the user entered nothing.
+local function readlnWithEcho(promptText)
+  -- Write the prompt first.
+  dispWrite(promptText)
+  if has_term and has_term_write then
+    _G.term.write(promptText)
+    termFlush()
   end
+
   local t = {}
+  local echoX, echoY = 1, 1
+  if onMonitor and monitor and hasFn(monitor, "getCursorPos") then
+    echoX, echoY = monitor.getCursorPos()
+  elseif has_term and has_term_getCursorPos then
+    echoX, echoY = _G.term.getCursorPos()
+  end
+
+  -- Echo helpers: write a character (or erase it) on both displays.
+  local function echoChar(ch)
+    if ch then
+      dispWrite(ch)
+      if has_term and has_term_write then
+        _G.term.write(ch)
+        termFlush()
+      end
+    else
+      -- Erase the last character on screen: back up one column, write a space, back up again.
+      local curX, curY = 1, 1
+      if onMonitor and monitor and hasFn(monitor, "getCursorPos") then
+        curX, curY = monitor.getCursorPos()
+      elseif has_term and has_term_getCursorPos then
+        curX, curY = _G.term.getCursorPos()
+      end
+      local eraseX = curX - 1
+      if eraseX < 1 then eraseX = 1 end
+      dispSetCursorPos(eraseX, curY)
+      dispWrite(" ")
+      if has_term and has_term_write then
+        _G.term.setCursorPos(eraseX, curY)
+        _G.term.write(" ")
+        termFlush()
+      end
+      dispSetCursorPos(eraseX, curY)
+    end
+  end
+
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
       local c = data
       if c == "\n" or c == "\r" then
+        -- Finalise: move to a new line on both displays.
+        dispWriteLn("")
+        if has_term and has_term_write then
+          _G.term.write("\n")
+          termFlush()
+        end
         break
       elseif c == "\b" or c == "\127" then
-        if #t > 0 then table.remove(t) end
+        if #t > 0 then
+          table.remove(t)
+          echoChar(nil)  -- erase last char from screen
+        end
       elseif type(c) == "string" and #c > 0 then
         t[#t + 1] = c
+        echoChar(c)
       end
     elseif evt == "key" then
       local key = data
       if key == keys.enter then
+        dispWriteLn("")
+        if has_term and has_term_write then
+          _G.term.write("\n")
+          termFlush()
+        end
         break
       elseif key == keys.backspace then
-        if #t > 0 then table.remove(t) end
+        if #t > 0 then
+          table.remove(t)
+          echoChar(nil)
+        end
       end
     end
   end
+
   local line = table.concat(t)
   if line == "" then return nil end
   return line
 end
 
+-- Simple key-only reader (no echo). Used for menu navigation and "press any key".
 local function readkey()
   local evt, key = os.pullEvent("key")
   return key
@@ -884,15 +956,21 @@ local function addFrogPort()
   dispSetCursorPos(1, 3)
   dispWriteLn("Enter the name of the new Frog Port:")
   dispWriteLn("")
-  prompt("> ")
-  local name = readln()
+
+  local name = readlnWithEcho("> ")
   if name and name ~= "" then
     name = string.match(name, "^%s*(.-)%s*$")
     if name ~= "" then
       frogPorts[#frogPorts + 1] = name
       dispWriteLn("")
       dispWriteLn("Added: " .. name)
+    else
+      dispWriteLn("")
+      dispWriteLn("(empty name — not added)")
     end
+  else
+    dispWriteLn("")
+    dispWriteLn("(cancelled)")
   end
   dispWriteLn("")
   dispWriteLn("(press any key to continue...)")
@@ -912,6 +990,7 @@ local function removeFrogPort()
     return
   end
 
+  -- Show the numbered list
   dispClear()
   drawHeader("REMOVE FROG PORT")
   dispSetTextColor(colors.white)
@@ -928,9 +1007,10 @@ local function removeFrogPort()
   local bottomY = 4 + #frogPorts + 1
   dispSetCursorPos(1, bottomY)
   dispSetTextColor(colors.darkGray)
+  dispWriteLn("")
   dispWriteLn("(type the number of the port to remove)")
-  prompt("> ")
-  local input = readln()
+
+  local input = readlnWithEcho("> ")
   if input then
     local num = tonumber(input)
     if num and num >= 1 and num <= #frogPorts then
@@ -939,8 +1019,11 @@ local function removeFrogPort()
       dispWriteLn("Removed: " .. removed)
     else
       dispWriteLn("")
-      dispWriteLn("Invalid number.")
+      dispWriteLn("Invalid number — enter a number from 1 to " .. #frogPorts)
     end
+  else
+    dispWriteLn("")
+    dispWriteLn("(cancelled)")
   end
   dispWriteLn("")
   dispWriteLn("(press any key to continue...)")
