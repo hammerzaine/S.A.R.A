@@ -434,8 +434,9 @@ local function scanAllSides()
           _G.term.write(line)
         end
       end
+      local tY = #diagLines + 2  -- baseline for ticker method listing (may be unused)
       if stockTicker then
-        local tY = #diagLines + 2
+        tY = #diagLines + 2
         _G.term.setCursorPos(1, tY)
         _G.term.setTextColor(colors.gray)
         _G.term.write("Ticker callable methods:")
