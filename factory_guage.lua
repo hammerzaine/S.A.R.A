@@ -53,11 +53,7 @@ else
   print("[diag] monitor: peripheral.find unavailable")
 end
 
--- Unified display: monitor if found, otherwise computer's term.
--- We also keep termDisplay for writing prompts to the computer's terminal
--- (monitors have no keyboard — all input goes through the computer).
 local display = monitor or term
-local termDisplay = term
 
 -- ---------------------------------------------------------------------------
 -- OUTPUT HELPERS
@@ -99,15 +95,13 @@ local function prompt(text)
 end
 
 -- Clear both the monitor (if present) and the computer's term.
--- When a monitor is active, the computer term shows a status panel so
--- the user knows where to type.
+-- When a monitor is active, the computer term shows a status panel.
 local function dispClear()
   if onMonitor and monitor and hasFn(monitor, "clear") then
     monitor.clear()
   elseif has_term and has_term_clear then
     _G.term.clear()
   end
-  -- Always show something on the computer's terminal.
   if has_term and has_term_clear and has_term_write then
     _G.term.clear()
     _G.term.setCursorPos(1, 1)
@@ -202,14 +196,9 @@ end
 -- STATE
 -- ---------------------------------------------------------------------------
 
-local frogPorts = {}        -- list of frog port names
-local selectedIndex = 1     -- currently highlighted menu item
-local currentScreen = "main" -- "main" | "frogport" | "settings"
-
--- ---------------------------------------------------------------------------
--- PERIPHERAL SCAN (for detecting frog ports and other blocks)
--- ---------------------------------------------------------------------------
-
+local frogPorts = {}
+local selectedIndex = 1
+local currentScreen = "main"
 local detectedPeripherals = {}
 
 local function scanAllSides()
@@ -220,13 +209,68 @@ local function scanAllSides()
     local ok, comp = pcall(function() return _G.peripheral.find(sideName) end)
     if ok and comp and comp.type and comp.type ~= "none" then
       detectedPeripherals[sideName] = {
-        side = sideName,
-        name = sideName,
-        type = comp.type,
-        comp = comp,
+        side = sideName, name = sideName, type = comp.type, comp = comp,
       }
     end
   end
+end
+
+-- ---------------------------------------------------------------------------
+-- MENU RENDERING (defined BEFORE screen functions that call them)
+-- ---------------------------------------------------------------------------
+
+local function drawHeader(title)
+  local w, h = dispGetSize()
+  dispClear()
+  dispSetBackgroundColor(colors.black)
+  dispSetTextColor(colors.yellow)
+  local titleLen = #title
+  local pad = math.floor((w - titleLen) / 2)
+  if pad < 0 then pad = 0 end
+  dispSetCursorPos(1, 1)
+  dispWrite(string.rep("=", w))
+  dispWriteLn()
+  dispSetCursorPos(1, 2)
+  dispWrite(string.rep(" ", pad) .. title .. string.rep(" ", w - pad - titleLen))
+  dispWriteLn()
+  dispWrite(string.rep("=", w))
+  dispWriteLn()
+end
+
+local function drawMainMenu()
+  local w, h = dispGetSize()
+  drawHeader("FACTORY GAUGE")
+
+  local items = {
+    { text = "Create factory gauge" },
+    { text = "Frog Port" },
+    { text = "Settings" },
+  }
+
+  local y = 4
+  for i, item in ipairs(items) do
+    local isSelected = (i == selectedIndex)
+    if isSelected then
+      dispSetTextColor(colors.white)
+      dispSetBackgroundColor(colors.blue)
+    else
+      dispSetTextColor(colors.gray)
+      dispSetBackgroundColor(colors.black)
+    end
+    dispSetCursorPos(2, y)
+    if isSelected then
+      dispWrite("> " .. item.text .. string.rep(" ", w - 4 - #item.text))
+    else
+      dispWrite("  " .. item.text .. string.rep(" ", w - 4 - #item.text))
+    end
+    y = y + 1
+  end
+
+  local bottomY = y + 1
+  dispSetCursorPos(1, bottomY)
+  dispSetTextColor(colors.darkGray)
+  dispSetBackgroundColor(colors.black)
+  dispWrite("W/S: navigate  |  Enter: select  |  Q: quit")
 end
 
 -- ---------------------------------------------------------------------------
@@ -243,7 +287,6 @@ local function addFrogPort()
   prompt("> ")
   local name = readln()
   if name and name ~= "" then
-    -- Trim whitespace
     name = string.match(name, "^%s*(.-)%s*$")
     if name ~= "" then
       frogPorts[#frogPorts + 1] = name
@@ -269,7 +312,6 @@ local function removeFrogPort()
     return
   end
 
-  -- Show list with numbers
   dispClear()
   drawHeader("REMOVE FROG PORT")
   dispSetTextColor(colors.white)
@@ -279,7 +321,7 @@ local function removeFrogPort()
 
   for i, name in ipairs(frogPorts) do
     dispSetCursorPos(2, 4 + i - 1)
-    dispSetTextColor(i == selectedIndex and colors.white or colors.gray)
+    dispSetTextColor(colors.gray)
     dispWrite(i .. ". " .. name)
   end
 
@@ -321,7 +363,6 @@ local function showFrogPortList()
   dispClear()
   drawHeader("FROG PORTS")
 
-  -- List ports with numbers, highlight selected
   local listY = 3
   for i, name in ipairs(frogPorts) do
     local isSelected = (i == selectedIndex)
@@ -341,7 +382,6 @@ local function showFrogPortList()
     listY = listY + 1
   end
 
-  -- Bottom options
   local bottomY = listY + 1
   dispSetCursorPos(1, bottomY)
   dispSetTextColor(colors.darkGray)
@@ -354,7 +394,6 @@ local function showFrogPortList()
   dispSetCursorPos(2, bottomY + 3)
   dispWrite("B. Back")
 
-  -- Handle keyboard in this sub-screen
   local running = true
   while running do
     local key = readkey()
@@ -363,8 +402,6 @@ local function showFrogPortList()
     if key == keys.q or key == keys.escape then
       running = false
     elseif key == keys.enter then
-      -- Enter on a port number does nothing special here;
-      -- use A/R to add/remove, B to go back
       running = false
     elseif key == keys.up or key == keys.w then
       if selectedIndex > 1 then
@@ -380,13 +417,13 @@ local function showFrogPortList()
       end
     elseif type(key) == "string" then
       local lower = string.lower(key)
-      if lower == "a" or lower == "a" then
+      if lower == "a" then
         addFrogPort()
-        showFrogPortList()  -- refresh the list
+        showFrogPortList()
         return
       elseif lower == "r" then
         removeFrogPort()
-        showFrogPortList()  -- refresh the list
+        showFrogPortList()
         return
       elseif lower == "b" then
         running = false
@@ -462,73 +499,13 @@ local function showCreateFactoryGauge()
 end
 
 -- ---------------------------------------------------------------------------
--- MENU RENDERING
--- ---------------------------------------------------------------------------
-
-local function drawHeader(title)
-  local w, h = dispGetSize()
-  dispClear()
-  dispSetBackgroundColor(colors.black)
-  dispSetTextColor(colors.yellow)
-  local titleLen = #title
-  local pad = math.floor((w - titleLen) / 2)
-  if pad < 0 then pad = 0 end
-  dispSetCursorPos(1, 1)
-  dispWrite(string.rep("=", w))
-  dispWriteLn()
-  dispSetCursorPos(1, 2)
-  dispWrite(string.rep(" ", pad) .. title .. string.rep(" ", w - pad - titleLen))
-  dispWriteLn()
-  dispWrite(string.rep("=", w))
-  dispWriteLn()
-end
-
-local function drawMainMenu()
-  local w, h = dispGetSize()
-  drawHeader("FACTORY GAUGE")
-
-  -- Menu items
-  local items = {
-    { text = "Create factory gauge", action = "create" },
-    { text = "Frog Port", action = "frogport" },
-    { text = "Settings", action = "settings" },
-  }
-
-  local y = 4
-  for i, item in ipairs(items) do
-    local isSelected = (i == selectedIndex)
-    if isSelected then
-      dispSetTextColor(colors.white)
-      dispSetBackgroundColor(colors.blue)
-    else
-      dispSetTextColor(colors.gray)
-      dispSetBackgroundColor(colors.black)
-    end
-    dispSetCursorPos(2, y)
-    if isSelected then
-      dispWrite("> " .. item.text .. string.rep(" ", w - 4 - #item.text))
-    else
-      dispWrite("  " .. item.text .. string.rep(" ", w - 4 - #item.text))
-    end
-    y = y + 1
-  end
-
-  -- Bottom hint
-  local bottomY = y + 1
-  dispSetCursorPos(1, bottomY)
-  dispSetTextColor(colors.darkGray)
-  dispSetBackgroundColor(colors.black)
-  dispWrite("W/S: navigate  |  Enter: select  |  Q: quit")
-end
-
--- ---------------------------------------------------------------------------
 -- MAIN LOOP
 -- ---------------------------------------------------------------------------
 
 local function main()
   scanAllSides()
 
-  -- Try to load frog ports from clipboard (book/sign) first
+  -- Load frog ports from sign text if available, else defaults
   local clipboardNames = {}
   for sideName, p in pairs(detectedPeripherals) do
     local typ = p.type or ""
@@ -549,14 +526,12 @@ local function main()
   if #clipboardNames > 0 then
     frogPorts = clipboardNames
   else
-    -- Default ports
     frogPorts = { "smasher", "grinder", "smelter" }
   end
 
   selectedIndex = 1
   currentScreen = "main"
 
-  -- Brief startup message
   if onMonitor then
     dispClear()
     dispSetCursorPos(1, 1)
@@ -576,7 +551,6 @@ local function main()
 
       if key == keys.q or key == keys.escape then
         running = false
-
       elseif key == keys.enter then
         if selectedIndex == 1 then
           currentScreen = "create"
@@ -585,17 +559,14 @@ local function main()
         elseif selectedIndex == 3 then
           currentScreen = "settings"
         end
-
       elseif key == keys.up or key == keys.w then
         if selectedIndex > 1 then
           selectedIndex = selectedIndex - 1
         else
-          selectedIndex = #({ "Create factory gauge", "Frog Port", "Settings" })
+          selectedIndex = 3
         end
-
       elseif key == keys.down or key == keys.s then
-        local max = 3
-        if selectedIndex < max then
+        if selectedIndex < 3 then
           selectedIndex = selectedIndex + 1
         else
           selectedIndex = 1
@@ -610,12 +581,12 @@ local function main()
     elseif currentScreen == "frogport" then
       showFrogPortList()
       currentScreen = "main"
-      selectedIndex = 2  -- Keep selection on Frog Port
+      selectedIndex = 2
 
     elseif currentScreen == "settings" then
       showSettings()
       currentScreen = "main"
-      selectedIndex = 3  -- Keep selection on Settings
+      selectedIndex = 3
     end
   end
 
