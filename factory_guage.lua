@@ -374,9 +374,41 @@ local function scanAllSides()
     end
 
     if y <= h then
+      y = y + 1
       dispSetTextColor(colors.gray)
       dispSetCursorPos(1, y)
       dispWrite("Press any key to continue...")
+    end
+
+    -- If we found a stock ticker, show what methods it has
+    if stockTicker and y + 2 <= h then
+      y = y + 2
+      dispSetTextColor(colors.darkGray)
+      dispSetCursorPos(1, y)
+      dispWrite("Ticker methods:")
+      y = y + 1
+      for k, v in pairs(stockTicker) do
+        if type(k) == "string" and type(v) == "function" then
+          if string.find(k, "stock", 1, true) or string.find(k, "Stock", 1, true) or
+             string.find(k, "item", 1, true) or string.find(k, "Item", 1, true) or
+             string.find(k, "list", 1, true) or string.find(k, "List", 1, true) or
+             string.find(k, "request", 1, true) or string.find(k, "filter", 1, true) then
+            if y > h then break end
+            dispSetCursorPos(2, y)
+            dispWrite(k .. " (fn)")
+            y = y + 1
+          end
+        elseif type(k) == "string" and type(v) == "table" then
+          for nk, nv in pairs(v) do
+            if type(nk) == "string" and type(nv) == "function" then
+              if y > h then break end
+              dispSetCursorPos(2, y)
+              dispWrite(k .. "." .. nk .. " (fn)")
+              y = y + 1
+            end
+          end
+        end
+      end
     end
 
     if has_term and has_term_write then
@@ -393,7 +425,35 @@ local function scanAllSides()
           _G.term.write(line)
         end
       end
-      local promptY = math.min(#diagLines + 1, h - 1)
+      -- Also show ticker methods on computer term
+      if stockTicker then
+        local tY = #diagLines + 2
+        _G.term.setCursorPos(1, tY)
+        _G.term.setTextColor(colors.gray)
+        _G.term.write("Ticker methods:")
+        tY = tY + 1
+        for k, v in pairs(stockTicker) do
+          if type(k) == "string" and type(v) == "function" then
+            if string.find(k, "stock", 1, true) or string.find(k, "Stock", 1, true) or
+               string.find(k, "item", 1, true) or string.find(k, "Item", 1, true) or
+               string.find(k, "list", 1, true) or string.find(k, "List", 1, true) or
+               string.find(k, "request", 1, true) or string.find(k, "filter", 1, true) then
+              _G.term.setCursorPos(2, tY)
+              _G.term.write(k .. " (fn)")
+              tY = tY + 1
+            end
+          elseif type(k) == "string" and type(v) == "table" then
+            for nk, nv in pairs(v) do
+              if type(nk) == "string" and type(nv) == "function" then
+                _G.term.setCursorPos(2, tY)
+                _G.term.write(k .. "." .. nk .. " (fn)")
+                tY = tY + 1
+              end
+            end
+          end
+        end
+      end
+      local promptY = math.min(tY + 1, h - 1)
       _G.term.setCursorPos(1, promptY + 1)
       _G.term.setTextColor(colors.gray)
       _G.term.write("Press any key to continue...")
