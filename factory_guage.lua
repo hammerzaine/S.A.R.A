@@ -1,3 +1,4 @@
+
 -- factory_guage.lua
 -- CC:Tweaked script — acts like Create Factory Gauge
 --
@@ -16,12 +17,15 @@
 --   5. Falls back to manual entry via terminal if no book found
 --   6. User selects recipes, checks stock, triggers craft
 --
--- CONTROLS:
---   Q / Esc     — quit
---   R           — rescan
---   1-9         — select recipe
+-- CONTROLS (keyboard goes through the COMPUTER, not the monitor):
+--   W/Up        — navigate up
+--   S/Down      — navigate down
+--   Enter       — select highlighted recipe
+--   1-9         — jump directly to recipe
+--   T           — trigger craft for selected recipe
 --   C           — check stock
---   T           — trigger craft
+--   R           — rescan peripherals
+--   Q/Esc       — quit
 
 print("factory_guage: starting...")
 
@@ -69,6 +73,12 @@ else
   print("[diag] monitor: peripheral.find unavailable")
 end
 
+-- Create the unified display target (monitor if found, otherwise term).
+-- We also keep a direct reference to the computer's term for input prompts,
+-- because monitors have no keyboard — all typing must happen in the
+-- computer's terminal window.
+local display = monitor or term
+
 -- ---------------------------------------------------------------------------
 -- OUTPUT HELPERS — work on monitor when available, term when not
 -- ---------------------------------------------------------------------------
@@ -77,25 +87,44 @@ local function termFlush()
   if has_term_flush then _G.term.flush() end
 end
 
--- Write to the active display (monitor or term).
+-- Write to the monitor/term display (the big screen)
 local function dispWrite(text)
-  if onMonitor and monitor then
-    monitor.write(text)
-  elseif has_term and has_term_write then
-    _G.term.write(text)
-    termFlush()
-  elseif has_io and io.stdout then
-    io.stdout:write(text)
-    io.stdout:flush()
-  end
+    display.write(text)
 end
 
--- Write a line to the active display.
+-- Write a line, handling scrolling properly for monitor vs term.
+-- Monitors have fixed size — don't scroll, just wrap or stop.
 local function dispWriteLn(text)
-  dispWrite(text .. "\n")
+    dispWrite(text)
+    local _, y = display.getCursorPos()
+    local _, h = display.getSize()
+    if y >= h then
+        -- At bottom of monitor — clear and restart.
+        if onMonitor then
+            display.setCursorPos(1, h)
+            display.write(string.rep(" ", 51))
+            display.setCursorPos(1, h)
+        else
+            display.scroll(1)
+            display.setCursorPos(1, h)
+        end
+    else
+        display.setCursorPos(1, y + 1)
+    end
 end
 
--- Clear the active display.
+-- Write a prompt to BOTH the monitor and the computer's terminal.
+-- This ensures you can see where to type regardless of which screen
+-- you're looking at.
+local function prompt(text)
+    dispWrite(text)
+    if has_term and has_term_write then
+        _G.term.write(text)
+        termFlush()
+    end
+end
+
+-- Clear the active display (monitor when available, term when not).
 local function dispClear()
   if onMonitor and monitor and hasFn(monitor, "clear") then
     monitor.clear()
@@ -115,11 +144,12 @@ end
 
 -- Set text colour on the active display.
 local function dispSetTextColor(c)
-  if onMonitor and monitor and hasFn(monitor, "setTextColor") then
-    monitor.setTextColor(c)
-  elseif has_term and has_term_setTextColor then
-    _G.term.setTextColor(c)
-  end
+    local finalColor = c or colors.white
+    if onMonitor and monitor and hasFn(monitor, "setTextColor") then
+        monitor.setTextColor(finalColor)
+    elseif has_term and has_term_setTextColor then
+        _G.term.setTextColor(finalColor)
+    end
 end
 
 -- Set background colour on the active display.
@@ -136,10 +166,9 @@ local function dispGetSize()
   if onMonitor and monitor and hasFn(monitor, "getSize") then
     return monitor.getSize()
   elseif has_term and has_term_getCursorPos then
-    -- term.getSize() returns w, h; fall back to known terminal size
     local ok, w, h = pcall(function() return _G.term.getSize() end)
     if ok then return w, h end
-    return 51, 19  -- default CC:T terminal
+    return 51, 19
   end
   return 51, 19
 end
@@ -346,7 +375,7 @@ local function loadClipboard()
     dispWriteLn("Press Enter on an empty line when done:")
     local entries = {}
     while true do
-      dispWrite("> ")
+      prompt("> ")
       local line = readln()
       if not line or line == "" then break end
       local trimmed = string.match(line, "^%s*(.-)%s*$")
@@ -360,7 +389,6 @@ local function loadClipboard()
       dispWriteLn("Using defaults: smasher, grinder, smelter")
     end
   end
-  -- Pause so user can read the message (on monitor this matters more)
   sleep(2)
 end
 
@@ -510,7 +538,7 @@ local function drawHeader(title)
   dispWrite(string.rep(" ", pad) .. title .. string.rep(" ", w - pad - titleLen))
   dispWriteLn()
   dispWrite(string.rep("=", w))
-  dispWriteLn("")
+  dispWriteLn()
 end
 
 local function countTable(t)
@@ -555,13 +583,13 @@ local function drawMainMenu()
   if portNames == "" then portNames = "(none)" end
   dispWrite("Frog Ports: " .. portNames)
 
-  -- Controls hint
+  -- Controls hint (monitor: tell user to use computer keyboard)
   dispSetCursorPos(1, 4)
   dispSetTextColor(colors.darkGray)
   if onMonitor then
-    dispWrite("W/S or Up/Down: navigate  |  Enter: select  |  Q: quit  |  R: rescan  |  C: stock  |  T: craft")
+    dispWrite("Use COMPUTER keyboard: W/S=up/down  Enter=select  1-9=recipe  T=craft  C=stock  R=rescan  Q=quit")
   else
-    dispWrite("1-9: recipe  |  C: stock  |  T: craft  |  R: rescan  |  Q: quit")
+    dispWrite("W/S: up/down  |  Enter: select  |  1-9: recipe  |  T: craft  |  C: stock  |  R: rescan  |  Q: quit")
   end
 
   -- Detected blocks
@@ -629,7 +657,7 @@ local function drawStockScreen()
   dispSetCursorPos(1, math.min(22, 3 + #items + 2))
   dispSetTextColor(colors.darkGray)
   dispWriteLn("(press any key to return...)")
-  sleep(2)
+  readkey()
 end
 
 local function drawCraftController()
@@ -641,7 +669,7 @@ local function drawCraftController()
   local recipeId = recipeList[selectedRecipe]
   if not recipeId then
     dispWriteLn("No recipe selected!")
-    sleep(2)
+    readkey()
     return
   end
   local r = recipes[recipeId]
@@ -673,19 +701,19 @@ local function drawCraftController()
   drawMenuItem(2, y + 1, false, "[2] Show queue")
   drawMenuItem(2, y + 2, false, "[Q] Back")
   dispWriteLn("")
-  dispWrite("Choice: ")
+  prompt("Choice: ")
   local choice = readln()
   if not choice then return end
 
   local queue, err = buildCraftQueue(r.output, r.count)
   if err and err ~= "in stock" then
     dispWriteLn("Error: " .. err)
-    sleep(2)
+    readkey()
     return
   end
   if err == "in stock" then
     dispWriteLn(r.output .. " is already in stock")
-    sleep(2)
+    readkey()
     return
   end
   if choice == "2" then
@@ -695,7 +723,7 @@ local function drawCraftController()
       local short = string.match(step.item, "^%w+:(.+)$") or step.item
       dispWriteLn("  " .. i .. ". " .. step.count .. "x " .. short)
     end
-    sleep(2)
+    readkey()
     return
   end
   -- Execute
@@ -711,7 +739,7 @@ local function drawCraftController()
   updateStockCache()
   dispWriteLn("")
   dispWriteLn("Done.")
-  sleep(2)
+  readkey()
   selectedRecipe = nil
 end
 
@@ -726,12 +754,13 @@ local function main()
   updateStockCache()
   selectedRecipe = 1
 
-  -- If we have a monitor, show a brief confirmation
+  -- If we have a monitor, show instructions on the monitor.
   if onMonitor then
     dispClear()
     dispSetCursorPos(1, 1)
     dispSetTextColor(colors.green)
-    dispWrite("Monitor ready. Rendering menu...")
+    dispWrite("Monitor ready. Keyboard input goes through the")
+    dispWriteLn("computer — use the computer's keyboard.")
     sleep(2)
   end
 
@@ -745,55 +774,70 @@ local function main()
       break
     end
 
+    local recipeList = {}
+    for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
+    table.sort(recipeList)
+
     if key == keys.q or key == keys.escape then
+      -- QUIT
       running = false
+
+    elseif key == keys.enter then
+      -- ENTER selects the currently highlighted recipe
+      if #recipeList > 0 and selectedRecipe >= 1 and selectedRecipe <= #recipeList then
+        selectedRecipe = selectedRecipe
+        drawCraftController()
+      end
+
     elseif key == keys.r then
+      -- RESCAN peripherals
       loadClipboard()
       updateStockCache()
+
     elseif key == keys.c then
+      -- STOCK SCREEN
       drawStockScreen()
+
     elseif key == keys.t then
-      if selectedRecipe then
+      -- TRIGGER CRAFT (opens craft controller for selected recipe)
+      if selectedRecipe and #recipeList > 0 then
         drawCraftController()
       else
-        dispWriteLn("Enter recipe number (1-" .. countTable(recipes) .. "):")
-        dispWrite("> ")
+        dispWriteLn("Enter recipe number (1-" .. #recipeList .. "):")
+        prompt("> ")
         local n = readln()
         if n then
           local num = tonumber(n)
-          if num and num >= 1 and num <= countTable(recipes) then
+          if num and num >= 1 and num <= #recipeList then
             selectedRecipe = num
             drawCraftController()
           end
         end
       end
+
+    elseif key == keys.up or key == keys.w then
+      -- NAVIGATE UP
+      if #recipeList > 0 then
+        selectedRecipe = selectedRecipe - 1
+        if selectedRecipe < 1 then selectedRecipe = #recipeList end
+      end
+
+    elseif key == keys.down or key == keys.s then
+      -- NAVIGATE DOWN
+      if #recipeList > 0 then
+        selectedRecipe = selectedRecipe + 1
+        if selectedRecipe > #recipeList then selectedRecipe = 1 end
+      end
+
     elseif type(key) == "number" and key >= 48 and key <= 57 then
+      -- NUMBER KEY 0-9 — jump directly to recipe
       local num = key - 48
-      local recipeList = {}
-      for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
-      table.sort(recipeList)
       if num >= 1 and num <= #recipeList then
         selectedRecipe = num
         drawCraftController()
       else
         dispWriteLn("No recipe #" .. num)
         sleep(1)
-      end
-    elseif key == keys.up or key == keys.w then
-      local recipeList = {}
-      for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
-      table.sort(recipeList)
-      if #recipeList > 0 then
-        selectedRecipe = selectedRecipe - 1
-        if selectedRecipe < 1 then selectedRecipe = #recipeList end
-      end
-    elseif key == keys.down or key == keys.s then
-      local recipeList = {}
-      for id in pairs(recipes) do recipeList[#recipeList + 1] = id end
-      table.sort(recipeList)
-      if #recipeList > 0 then
-        selectedRecipe = selectedRecipe + 1
-        if selectedRecipe > #recipeList then selectedRecipe = 1 end
       end
     end
   end
