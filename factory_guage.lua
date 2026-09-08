@@ -562,41 +562,70 @@ local function readStockFromTicker()
     end
   end
 
-  -- Pattern 7: requestFiltered directly on ticker
+  -- Pattern 7: Direct access for known Create stock ticker methods
+  -- The ticker exposes: stock.getItemDetail
+  --                    requestFiltered.getStockItemDetail.list
+  -- Try calling them directly with explicit nesting.
+
+  -- 7a: stock.getItemDetail
+  if stockTicker.stock and type(stockTicker.stock) == "table" and stockTicker.stock.getItemDetail then
+    local ok, result = pcall(stockTicker.stock.getItemDetail)
+    if ok and result then
+      if type(result) == "table" then
+        -- May return { items = {...} } or a single item or a flat list
+        if result.items and type(result.items) == "table" then
+          for _, item in ipairs(result.items) do
+            addItem(item.id or item.name or item.displayName or "",
+                    item.count or item.size or item.amount or 0)
+          end
+        elseif result[1] and type(result[1]) == "table" then
+          for _, item in ipairs(result) do
+            addItem(item.id or item.name or item.displayName or "",
+                    item.count or item.size or item.amount or 0)
+          end
+        elseif result.id or result.name then
+          addItem(result.id or result.name or result.displayName or "",
+                  result.count or result.size or result.amount or 1)
+        end
+        if next(stockCache) then return end
+      end
+    end
+  end
+
+  -- 7b: requestFiltered.getStockItemDetail.list
   if stockTicker.requestFiltered and type(stockTicker.requestFiltered) == "table" then
-    for method in pairs(stockTicker.requestFiltered) do
-      if type(method) == "string" and
-         (string.find(method, "stock", 1, true) or
-          string.find(method, "Stock", 1, true) or
-          string.find(method, "item", 1, true) or
-          string.find(method, "list", 1, true)) then
-        local ok, result = pcall(stockTicker.requestFiltered[method])
-        if ok and result then
-          if type(result) == "table" then
-            if result.items and type(result.items) == "table" then
-              for _, item in ipairs(result.items) do
-                addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
-              end
-            elseif result[1] and type(result[1]) == "table" then
-              for _, item in ipairs(result) do
-                addItem(item.id or item.name or item.displayName or "", item.count or item.size or item.amount or 0)
-              end
-            elseif result.id or result.name then
-              addItem(result.id or result.name or result.displayName or "", result.count or result.size or result.amount or 1)
-            else
-              for name, count in pairs(result) do
-                if type(count) == "number" and count > 0 then
-                  stockCache[name] = (stockCache[name] or 0) + count
-                end
+    if stockTicker.requestFiltered.getStockItemDetail and
+       type(stockTicker.requestFiltered.getStockItemDetail) == "table" and
+       stockTicker.requestFiltered.getStockItemDetail.list then
+      local ok, result = pcall(stockTicker.requestFiltered.getStockItemDetail.list)
+      if ok and result then
+        if type(result) == "table" then
+          if result.items and type(result.items) == "table" then
+            for _, item in ipairs(result.items) do
+              addItem(item.id or item.name or item.displayName or "",
+                      item.count or item.size or item.amount or 0)
+            end
+          elseif result[1] and type(result[1]) == "table" then
+            for _, item in ipairs(result) do
+              addItem(item.id or item.name or item.displayName or "",
+                      item.count or item.size or item.amount or 0)
+            end
+          elseif result.id or result.name then
+            addItem(result.id or result.name or result.displayName or "",
+                    result.count or result.size or result.amount or 1)
+          else
+            -- Maybe it's a key-value: { itemName = count }
+            for name, count in pairs(result) do
+              if type(count) == "number" and count > 0 then
+                stockCache[name] = (stockCache[name] or 0) + count
               end
             end
-            if next(stockCache) then return end
           end
+          if next(stockCache) then return end
         end
       end
     end
   end
-end
 
 -- ---------------------------------------------------------------------------
 -- MENU RENDERING
