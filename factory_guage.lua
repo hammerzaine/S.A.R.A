@@ -309,34 +309,71 @@ local function scanAllSides()
     diagLines[#diagLines + 1] = "[diag] STOCK TICKER: NOT FOUND — see above for what each side detected"
   end
 
-  -- Print all diagnostics to the computer's term and WAIT for a key press.
-  -- Keep it compact — show all sides but highlight the stock ticker.
-  -- CC:T terminal is ~19 lines tall; keep under 16 lines of content.
-  if has_term and has_term_write and #diagLines > 0 then
-    _G.term.clear()
-    _G.term.setCursorPos(1, 1)
-    _G.term.setTextColor(colors.yellow)
-    _G.term.write("=== PERIPHERAL SCAN ===")
-    _G.term.setTextColor(colors.white)
-    local y = 2
+  -- Print diagnostics to the display (monitor if found, otherwise computer's term).
+  -- Highlight the stock ticker line. Pause for keypress so user can read it.
+  if #diagLines > 0 then
+    -- Clear the display so we have a clean slate
+    if onMonitor and monitor and hasFn(monitor, "clear") then
+      monitor.clear()
+    elseif has_term and has_term_clear then
+      _G.term.clear()
+    end
+
+    local w, h = dispGetSize()
+    local y = 1
+
+    -- Title
+    dispSetTextColor(colors.yellow)
+    dispSetCursorPos(1, y)
+    dispWrite("=== PERIPHERAL SCAN ===")
+    y = y + 1
+
+    -- Each side line
+    dispSetTextColor(colors.white)
     for _, line in ipairs(diagLines) do
-      -- Highlight the stock ticker line
+      if y > h then break end
       if string.find(line, "STOCK TICKER") then
-        _G.term.setTextColor(colors.green)
-        _G.term.setCursorPos(1, y)
-        _G.term.write(">> " .. line)
-        _G.term.setTextColor(colors.white)
+        dispSetTextColor(colors.green)
+        dispSetCursorPos(1, y)
+        dispWrite(">> " .. line)
+        dispSetTextColor(colors.white)
       else
-        _G.term.setCursorPos(1, y)
-        _G.term.write(line)
+        dispSetCursorPos(1, y)
+        dispWrite(line)
       end
       y = y + 1
-      if y > 19 then break end  -- don't overflow the terminal
     end
-    _G.term.setTextColor(colors.gray)
-    _G.term.setCursorPos(1, math.min(y + 1, 19))
-    _G.term.write("Press any key to continue...")
-    if has_term_flush then _G.term.flush() end
+
+    -- Prompt
+    if y <= h then
+      dispSetTextColor(colors.gray)
+      dispSetCursorPos(1, y)
+      dispWrite("Press any key to continue...")
+    end
+
+    -- Flush to both displays
+    if has_term and has_term_write then
+      _G.term.clear()
+      _G.term.setCursorPos(1, 1)
+      for i, line in ipairs(diagLines) do
+        if i > h then break end
+        _G.term.setCursorPos(1, i + 1)
+        if string.find(line, "STOCK TICKER") then
+          _G.term.setTextColor(colors.green)
+          _G.term.write(">> " .. line)
+          _G.term.setTextColor(colors.white)
+        else
+          _G.term.write(line)
+        end
+      end
+      local promptY = math.min(#diagLines + 1, h - 1)
+      _G.term.setCursorPos(1, promptY + 1)
+      _G.term.setTextColor(colors.gray)
+      _G.term.write("Press any key to continue...")
+      if has_term_flush then _G.term.flush() end
+    end
+
+    -- Wait for keypress
     local evt = os.pullEventRaw("key")
   end
 end
