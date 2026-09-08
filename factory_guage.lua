@@ -1,4 +1,3 @@
-#!/usr/bin/env lua
 -- factory_guage.lua
 -- CC:Tweaked script — simplified menu-driven factory gauge
 --
