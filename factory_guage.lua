@@ -1060,50 +1060,53 @@ local function showFrogPortList()
     return
   end
 
-  dispClear()
-  drawHeader("FROG PORTS")
+  local listNeedsRedraw = true
 
-  local listY = 3
-  for i, name in ipairs(frogPorts) do
-    local isSelected = (i == selectedIndex)
-    if isSelected then
-      dispSetTextColor(colors.white)
-      dispSetBackgroundColor(colors.blue)
-    else
-      dispSetTextColor(colors.gray)
+  while true do
+    if listNeedsRedraw then
+      dispClear()
+      drawHeader("FROG PORTS")
+
+      local listY = 3
+      for i, name in ipairs(frogPorts) do
+        local isSelected = (i == selectedIndex)
+        if isSelected then
+          dispSetTextColor(colors.white)
+          dispSetBackgroundColor(colors.blue)
+        else
+          dispSetTextColor(colors.gray)
+          dispSetBackgroundColor(colors.black)
+        end
+        dispSetCursorPos(2, listY)
+        if isSelected then
+          dispWrite("> " .. i .. ". " .. name .. " ")
+        else
+          dispWrite("  " .. i .. ". " .. name .. " ")
+        end
+        listY = listY + 1
+      end
+
+      local bottomY = listY + 1
+      dispSetCursorPos(1, bottomY)
+      dispSetTextColor(colors.darkGray)
       dispSetBackgroundColor(colors.black)
-    end
-    dispSetCursorPos(2, listY)
-    if isSelected then
-      dispWrite("> " .. i .. ". " .. name .. " ")
-    else
-      dispWrite("  " .. i .. ". " .. name .. " ")
-    end
-    listY = listY + 1
-  end
+      dispWriteLn("")
+      dispSetCursorPos(2, bottomY + 1)
+      dispWrite("A. Add Frog Port")
+      dispSetCursorPos(2, bottomY + 2)
+      dispWrite("R. Remove Frog Port")
+      dispSetCursorPos(2, bottomY + 3)
+      dispWrite("B. Back")
 
-  local bottomY = listY + 1
-  dispSetCursorPos(1, bottomY)
-  dispSetTextColor(colors.darkGray)
-  dispSetBackgroundColor(colors.black)
-  dispWriteLn("")
-  dispSetCursorPos(2, bottomY + 1)
-  dispWrite("A. Add Frog Port")
-  dispSetCursorPos(2, bottomY + 2)
-  dispWrite("R. Remove Frog Port")
-  dispSetCursorPos(2, bottomY + 3)
-  dispWrite("B. Back")
+      listNeedsRedraw = false
+    end
 
-  local running = true
-  while running do
     local key = readkey()
     if not key then break end
 
-    -- Normalise: both string chars ("w", "a", "r"… ) and numeric key
-    -- constants (keys.w, keys.enter, keys.escape, …) can arrive.
     local norm = type(key) == "string" and string.lower(key) or nil
-    local isUp    = (key == keys.up) or (norm == "w" or norm == "up")
-    local isDown  = (key == keys.down) or (norm == "s" or norm == "down")
+    local isUp    = (key == keys.up)    or (norm == "w"  or norm == "up")
+    local isDown  = (key == keys.down)  or (norm == "s"  or norm == "down")
     local isEsc   = (key == keys.escape) or (key == keys.q)
                      or (norm == "q") or (norm == "escape")
     local isEnter = (key == keys.enter)
@@ -1111,11 +1114,8 @@ local function showFrogPortList()
     local isR     = (norm == "r")
     local isB     = (norm == "b")
 
-    if isEsc then
-      running = false
-
-    elseif isEnter then
-      running = false
+    if isEsc or isB or isEnter then
+      break
 
     elseif isUp then
       if selectedIndex > 1 then
@@ -1123,6 +1123,7 @@ local function showFrogPortList()
       else
         selectedIndex = #frogPorts
       end
+      listNeedsRedraw = true
 
     elseif isDown then
       if selectedIndex < #frogPorts then
@@ -1130,19 +1131,26 @@ local function showFrogPortList()
       else
         selectedIndex = 1
       end
+      listNeedsRedraw = true
 
     elseif isA then
       addFrogPort()
-      showFrogPortList()
-      return
+      -- After adding, clamp selectedIndex to the new list size.
+      if selectedIndex > #frogPorts then
+        selectedIndex = #frogPorts
+      end
+      listNeedsRedraw = true
 
     elseif isR then
       removeFrogPort()
-      showFrogPortList()
-      return
-
-    elseif isB then
-      running = false
+      -- After removing, clamp selectedIndex.
+      if #frogPorts > 0 and selectedIndex > #frogPorts then
+        selectedIndex = #frogPorts
+      elseif #frogPorts == 0 then
+        -- List empty — exit the modal.
+        break
+      end
+      listNeedsRedraw = true
     end
     -- Any other key is ignored and we loop again.
   end
