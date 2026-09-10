@@ -429,7 +429,6 @@ end
 
 local function neededCount(g)
   return g.qty
-  end
 end
 
 local function gaugeWorking(g)
@@ -529,7 +528,10 @@ end
 local dashboardBlinkPhase = 0
 local lastDashboardDrawY = 0
 
--- PRODUCTION REQUEST — talk to the stock ticker
+local function drawDashboard(w, startY)
+  local h = 19  -- default; will be corrected below
+  local _, realH = dispGetSize()
+  if realH and realH > 0 then h = realH end
 
   local y = startY
   dispSetTextColor(colors.white)
