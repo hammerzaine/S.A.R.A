@@ -910,11 +910,6 @@ local function showSettings()
   termSetCursorPos(1, 7)
   termWriteLn("  Monitor auto-detect:    " .. (onMonitor and "Enabled" or "Disabled"))
   termSetCursorPos(1, 8)
-  termSetCursorPos(1, 9)
-    termSetTextColor(colors.white)
-  else
-    termSetTextColor(colors.gray)
-  end
   termSetCursorPos(1, 11)
   termSetTextColor(colors.darkGray)
   termWriteLn("")
