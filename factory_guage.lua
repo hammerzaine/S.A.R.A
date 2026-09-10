@@ -52,7 +52,7 @@ local display = monitor or term
 -- ---------------------------------------------------------------------------
 
 local function termFlush()
-  if has_term_flush then _G.term.flush() end
+  if has_term_flush then pcall(function() _G.term.flush() end) end
 end
 
 local function dispWrite(text)
@@ -80,60 +80,70 @@ end
 local function prompt(text)
     dispWrite(text)
     if has_term and has_term_write then
-        _G.term.write(text)
+        pcall(function() _G.term.write(text) end)
         termFlush()
     end
 end
 
 local function dispClear()
   if onMonitor and monitor and hasFn(monitor, "clear") then
-    monitor.clear()
+    pcall(function() monitor.clear() end)
   elseif has_term and has_term_clear then
-    _G.term.clear()
+    pcall(function() _G.term.clear() end)
   end
   if has_term and has_term_clear and has_term_write then
-    _G.term.clear()
-    _G.term.setCursorPos(1, 1)
-    _G.term.setTextColor(colors.green)
-    _G.term.write("Factory Gauge — monitor active")
-    _G.term.setTextColor(colors.gray)
-    _G.term.setCursorPos(1, 2)
-    _G.term.write("Use THIS computer's keyboard to control")
-    _G.term.setCursorPos(1, 3)
-    _G.term.write("W/S: navigate  |  Enter: select  |  Q: back/quit")
+    pcall(function() _G.term.clear() end)
+    pcall(function() _G.term.setCursorPos(1, 1) end)
+    dispSetTextColor(colors.green)
+    pcall(function() _G.term.write("Factory Gauge — monitor active") end)
+    dispSetTextColor(colors.gray)
+    pcall(function() _G.term.setCursorPos(1, 2) end)
+    pcall(function() _G.term.write("Use THIS computer's keyboard to control") end)
+    pcall(function() _G.term.setCursorPos(1, 3) end)
+    pcall(function() _G.term.write("W/S: navigate  |  Enter: select  |  Q: back/quit") end)
     termFlush()
   end
 end
 
 local function dispSetCursorPos(x, y)
   if onMonitor and monitor and hasFn(monitor, "setCursorPos") then
-    monitor.setCursorPos(x, y)
+    pcall(function() monitor.setCursorPos(x, y) end)
   elseif has_term and has_term_setCursorPos then
-    _G.term.setCursorPos(x, y)
+    pcall(function() _G.term.setCursorPos(x, y) end)
   end
 end
 
 local function dispSetTextColor(c)
-    local finalColor = c or colors.white
+    local finalColor = c
+    if not finalColor and has_colors then
+        finalColor = colors.white
+    elseif not finalColor then
+        finalColor = 1  -- default white (CC:T color ID fallback)
+    end
     if onMonitor and monitor and hasFn(monitor, "setTextColor") then
-        monitor.setTextColor(finalColor)
+        pcall(function() monitor.setTextColor(finalColor) end)
     elseif has_term and has_term_setTextColor then
-        _G.term.setTextColor(finalColor)
+        pcall(function() _G.term.setTextColor(finalColor) end)
     end
 end
 
 local function dispSetBackgroundColor(c)
-  if onMonitor and monitor and hasFn(monitor, "setBackgroundColor") then
-    monitor.setBackgroundColor(c)
-  elseif has_term and hasFn(_G.term, "setBackgroundColor") then
-    _G.term.setBackgroundColor(c)
-  end
+    if not c and has_colors then
+        c = colors.black
+    elseif not c then
+        c = 0  -- default black
+    end
+    if onMonitor and monitor and hasFn(monitor, "setBackgroundColor") then
+        pcall(function() monitor.setBackgroundColor(c) end)
+    elseif has_term and has_term_setBackgroundColor then
+        pcall(function() _G.term.setBackgroundColor(c) end)
+    end
 end
 
 -- Set text scale on monitor (1 = default, 0.5 = smaller, 2 = larger).
 local function dispSetTextScale(scale)
   if onMonitor and monitor and hasFn(monitor, "setTextScale") then
-    monitor.setTextScale(scale)
+    pcall(function() monitor.setTextScale(scale) end)
   end
 end
 
@@ -158,21 +168,21 @@ end
 
 local function termWrite(text)
   if has_term and has_term_write then
-    _G.term.write(text)
+    pcall(function() _G.term.write(text) end)
   end
 end
 
 local function termWriteLn(text)
   termWrite(text)
   if has_term and has_term_getCursorPos then
-    local _, y = pcall(function() return _G.term.getCursorPos() end)
+    local ok, y = pcall(function() return _G.term.getCursorPos() end)
     if ok then
-      local _, h = pcall(function() return _G.term.getSize() end)
-      if y and h and y >= h then
-        _G.term.scroll(1)
-        _G.term.setCursorPos(1, h)
+      local ok2, h = pcall(function() return _G.term.getSize() end)
+      if ok2 and y and h and y >= h then
+        pcall(function() _G.term.scroll(1) end)
+        pcall(function() _G.term.setCursorPos(1, h) end)
       else
-        _G.term.setCursorPos(1, y + 1)
+        pcall(function() _G.term.setCursorPos(1, y + 1) end)
       end
     end
   end
@@ -180,31 +190,31 @@ end
 
 local function termClear()
   if has_term and has_term_clear then
-    _G.term.clear()
+    pcall(function() _G.term.clear() end)
   end
 end
 
 local function termSetCursorPos(x, y)
   if has_term and has_term_setCursorPos then
-    _G.term.setCursorPos(x, y)
+    pcall(function() _G.term.setCursorPos(x, y) end)
   end
 end
 
 local function termSetTextColor(c)
-  if has_term and has_term_setTextColor then
-    _G.term.setTextColor(c)
+  if has_term and has_term_setTextColor and c then
+    pcall(function() _G.term.setTextColor(c) end)
   end
 end
 
 local function termSetBackgroundColor(c)
-  if has_term and hasFn(_G.term, "setBackgroundColor") then
-    _G.term.setBackgroundColor(c)
+  if has_term and has_term_setBackgroundColor and c then
+    pcall(function() _G.term.setBackgroundColor(c) end)
   end
 end
 
 local function termSetTextScale(scale)
   if has_term and has_term_setTextScale then
-    _G.term.setTextScale(scale)
+    pcall(function() _G.term.setTextScale(scale) end)
   end
 end
 
@@ -236,7 +246,7 @@ local function readlnWithEcho(promptText)
   -- Write the prompt first.
   dispWrite(promptText)
   if has_term and has_term_write then
-    _G.term.write(promptText)
+    pcall(function() _G.term.write(promptText) end)
     termFlush()
   end
 
@@ -253,7 +263,7 @@ local function readlnWithEcho(promptText)
     if ch then
       dispWrite(ch)
       if has_term and has_term_write then
-        _G.term.write(ch)
+        pcall(function() _G.term.write(ch) end)
         termFlush()
       end
     else
@@ -269,8 +279,8 @@ local function readlnWithEcho(promptText)
       dispSetCursorPos(eraseX, curY)
       dispWrite(" ")
       if has_term and has_term_write then
-        _G.term.setCursorPos(eraseX, curY)
-        _G.term.write(" ")
+        pcall(function() _G.term.setCursorPos(eraseX, curY) end)
+        pcall(function() _G.term.write(" ") end)
         termFlush()
       end
       dispSetCursorPos(eraseX, curY)
@@ -285,7 +295,7 @@ local function readlnWithEcho(promptText)
         -- Finalise: move to a new line on both displays.
         dispWriteLn("")
         if has_term and has_term_write then
-          _G.term.write("\n")
+          pcall(function() _G.term.write("\n") end)
           termFlush()
         end
         break
@@ -303,7 +313,7 @@ local function readlnWithEcho(promptText)
       if key == keys.enter then
         dispWriteLn("")
         if has_term and has_term_write then
-          _G.term.write("\n")
+          pcall(function() _G.term.write("\n") end)
           termFlush()
         end
         break
@@ -791,9 +801,9 @@ local function scanAllSides()
   -- Print diagnostics to the display and WAIT for keypress
   if #diagLines > 0 then
     if onMonitor and monitor and hasFn(monitor, "clear") then
-      monitor.clear()
+      pcall(function() monitor.clear() end)
     elseif has_term and has_term_clear then
-      _G.term.clear()
+      pcall(function() _G.term.clear() end)
     end
 
     dispSetTextScale(0.5)
@@ -861,25 +871,25 @@ local function scanAllSides()
 
     -- Mirror to computer's term
     if has_term and has_term_write then
-      _G.term.clear()
-      _G.term.setCursorPos(1, 1)
+      pcall(function() _G.term.clear() end)
+      pcall(function() _G.term.setCursorPos(1, 1) end)
       for i, line in ipairs(diagLines) do
         if i > h then break end
-        _G.term.setCursorPos(1, i + 1)
+        pcall(function() _G.term.setCursorPos(1, i + 1) end)
         if string.find(line, "STOCK TICKER") then
-          _G.term.setTextColor(colors.green)
-          _G.term.write(">> " .. line)
-          _G.term.setTextColor(colors.white)
+          dispSetTextColor(colors.green)
+          pcall(function() _G.term.write(">> " .. line) end)
+          dispSetTextColor(colors.white)
         else
-          _G.term.write(line)
+          pcall(function() _G.term.write(line) end)
         end
       end
       local tY = #diagLines + 2
       if stockTicker then
         tY = #diagLines + 2
-        _G.term.setCursorPos(1, tY)
-        _G.term.setTextColor(colors.gray)
-        _G.term.write("Ticker callable methods:")
+        pcall(function() _G.term.setCursorPos(1, tY) end)
+        dispSetTextColor(colors.gray)
+        pcall(function() _G.term.write("Ticker callable methods:") end)
         tY = tY + 1
         for k, v in pairs(stockTicker) do
           if type(k) == "string" and type(v) == "function" then
@@ -887,15 +897,15 @@ local function scanAllSides()
                string.find(k, "item", 1, true) or string.find(k, "Item", 1, true) or
                string.find(k, "list", 1, true) or string.find(k, "List", 1, true) or
                string.find(k, "request", 1, true) or string.find(k, "filter", 1, true) then
-              _G.term.setCursorPos(2, tY)
-              _G.term.write(k .. " (fn)")
+              pcall(function() _G.term.setCursorPos(2, tY) end)
+              pcall(function() _G.term.write(k .. " (fn) end)")
               tY = tY + 1
             end
           elseif type(k) == "string" and type(v) == "table" then
             for nk, nv in pairs(v) do
               if type(nk) == "string" and type(nv) == "function" then
-                _G.term.setCursorPos(2, tY)
-                _G.term.write(k .. "." .. nk .. " (fn)")
+                pcall(function() _G.term.setCursorPos(2, tY) end)
+                pcall(function() _G.term.write(k .. "." .. nk .. " (fn) end)")
                 tY = tY + 1
               end
             end
@@ -904,10 +914,10 @@ local function scanAllSides()
       end
       local promptY = math.max(tY + 1, #diagLines + 2)
       if promptY < h then
-        _G.term.setCursorPos(1, promptY + 1)
-        _G.term.setTextColor(colors.gray)
-        _G.term.write("Press any key to continue...")
-        if has_term_flush then _G.term.flush() end
+        pcall(function() _G.term.setCursorPos(1, promptY + 1) end)
+        dispSetTextColor(colors.gray)
+        pcall(function() _G.term.write("Press any key to continue...") end)
+        if has_term_flush then pcall(function() _G.term.flush() end) end
       end
     end
 
