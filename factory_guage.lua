@@ -358,23 +358,33 @@ local function readkey()
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
+      -- Only process letter keys from char events. CC:T emits both a "char"
+      -- and a "key" event for one physical press; by handling letters only
+      -- from "char" and special keys only from "key", each press = one action.
       if type(data) == "string" and #data == 1 then
-        return string.lower(data)
+        local c = string.lower(data)
+        if c:match("^[a-z]$") then
+          return c
+        end
       end
     elseif evt == "key" or evt == "key_down" or evt == "key_up" then
       if type(data) == "number" then
         local label = KEY_LABEL[data]
         if label then
-          return label
+          -- Only return special keys from key events; letters come via "char".
+          if label == "enter" or label == "up" or label == "down" or label == "escape" then
+            return label
+          end
         end
-        -- Unknown numeric key code — ignore (could be a modifier or
-        -- an unrecognised key on this CC:T build).
+        -- Unknown numeric key code — ignore.
       elseif type(data) == "string" and #data == 1 then
         -- Some builds pass a single-char string where we'd expect a number.
-        return string.lower(data)
+        local c = string.lower(data)
+        if c:match("^[a-z]$") then
+          return c
+        end
       end
     elseif evt == nil then
-      -- No more events.
       return nil
     end
     -- Any other event type (timer, etc.): ignore and loop.
@@ -389,17 +399,10 @@ local frogPorts = {}
 local selectedIndex = 1
 local currentScreen = "main"
 local detectedPeripherals = {}
-local stockTicker = nil
-local stockTickerSide = nil
-local stockCache = {}
 local factoryGauges = {}
 
 local dashboardTimer = nil
 local dashboardNeedsRefresh = false
-local productionFn = nil
-local productionFnPath = nil
-local stockReadMethod = nil
-local stockReadMethodPath = nil
 local currentDashboardItemColor = nil  -- cached color per gauge line for blinking
 
 -- ---------------------------------------------------------------------------
@@ -411,7 +414,6 @@ local currentDashboardItemColor = nil  -- cached color per gauge line for blinki
 --     mode = "stack" | "item", inactive = boolean }
 --
 -- "Needed" for a gauge = qty, interpreted as stacks if mode=="stack" else items.
--- "Stock" is read from stockCache keyed by the gauge's item name (normalised).
 
 local function gaugeDisplayName(g)
   return g.name
@@ -424,38 +426,12 @@ local function gaugeItemName(g)
   return g.name
 end
 
-local function stockForGauge(g)
-  local key = gaugeItemName(g)
-  if stockCache[key] then
-    return stockCache[key]
-  end
-  -- Try common namespace prefixes.
-  for _, ns in ipairs({ "minecraft:", "create:", "forge:", "" }) do
-    local k = ns .. key
-    if stockCache[k] then
-      return stockCache[k]
-    end
-    -- Also try without any namespace but the raw id may be numeric-ish.
-  end
-  -- Try to match by stripping any namespace off keys in stockCache.
-  for ck, cv in pairs(stockCache) do
-    local bare = string.match(ck, "^%w+:(.+)$")
-    if bare and bare == key then
-      return cv
-    end
   end
   return 0
 end
 
 local function neededCount(g)
-  -- qty is in stacks or items depending on mode. Multiply by a per-unit factor
-  -- so the gauge's "needed" matches what the stock ticker reports as a count.
-  -- If mode=="stack", treat qty as stacks (each stack = 64 items). Otherwise
-  -- qty is already the item count.
-  if g.mode == "stack" then
-    return g.qty * 64
-  else
-    return g.qty
+  return g.qty
   end
 end
 
@@ -517,693 +493,12 @@ local function countTotalStock()
       local key = gaugeItemName(g)
       if not seen[key] then
         seen[key] = true
-        total = total + stockForGauge(g)
+        total = total + 0
       end
     end
   end
   return total
 end
-
-local function scanAllSides()
-  detectedPeripherals = {}
-  stockTicker = nil
-  stockTickerSide = nil
-  stockCache = {}
-  if not has_peripheral_find then return end
-
-  local diagLines = {}
-
-  -- 1. Scan all sides, wrapping each one to get its type
-  local sides_to_scan = { "left", "right", "front", "back", "top", "bottom" }
-  for _, sideName in ipairs(sides_to_scan) do
-    local ok, comp = pcall(function() return _G.peripheral.wrap(sideName) end)
-    if ok and comp then
-      local typ = type(comp)
-      if typ == "table" then
-        local compType = "unknown"
-        if hasFn(comp, "getType") then
-          compType = comp.getType()
-        elseif hasFn(comp, "type") then
-          compType = comp.type
-        elseif hasFn(comp, "getName") then
-          compType = comp.getName()
-        end
-        local methods = {}
-        for k, v in pairs(comp) do
-          if type(k) == "string" and type(v) == "function" then
-            methods[#methods + 1] = k
-          elseif type(k) == "string" and type(v) == "table" then
-            local nestedMethods = {}
-            for nk, nv in pairs(v) do
-              if type(nk) == "string" and type(nv) == "function" then
-                nestedMethods[#nestedMethods + 1] = nk
-              end
-            end
-            if #nestedMethods > 0 then
-              methods[#methods + 1] = k .. "." .. table.concat(nestedMethods, ",")
-            end
-          end
-        end
-        detectedPeripherals[sideName] = {
-          side = sideName, name = sideName, type = compType, comp = comp, methods = methods,
-        }
-        local methodsStr = table.concat(methods, ",")
-        diagLines[#diagLines + 1] = "side " .. sideName ..
-          ": type=" .. compType .. " methods=" .. methodsStr
-      else
-        diagLines[#diagLines + 1] = "side " .. sideName .. ": not a table (type=" .. typ .. ")"
-      end
-    else
-      diagLines[#diagLines + 1] = "side " .. sideName .. ": no peripheral"
-    end
-  end
-
-  -- 2. Search for stock ticker by type name
-  local tickerNames = {
-    "stock_ticker", "stockticker", "tickertape", "stock_display",
-    "create:stock_ticker", "create:stockticker", "item_display",
-    "stock", "ticker", "create:ticker", "create:stock_ticker",
-    "create:stockticker", "stocktickers", "ticker_minecolonies",
-    "minecolonies:ticker", "stockpanel", "itembar", "bar",
-  }
-  for _, tickerName in ipairs(tickerNames) do
-    local ok, comp = pcall(function() return _G.peripheral.find(tickerName) end)
-    if ok and comp then
-      stockTicker = comp
-      for sideName, p in pairs(detectedPeripherals) do
-        if p.comp == comp then
-          stockTickerSide = sideName
-          break
-        end
-      end
-      if not stockTickerSide then
-        for _, sideName in ipairs(sides_to_scan) do
-          local w = _G.peripheral.wrap(sideName)
-          if w == comp then
-            stockTickerSide = sideName
-            break
-          end
-        end
-      end
-      diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED as '" .. tickerName ..
-        "' on side " .. (stockTickerSide or "unknown")
-      break
-    end
-  end
-
-  -- 2b. Direct peripheral.stock property check
-  if not stockTicker and _G.peripheral and _G.peripheral.stock then
-    local stockProp = _G.peripheral.stock
-    if type(stockProp) == "table" then
-      stockTicker = stockProp
-      stockTickerSide = "indirect"
-      diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED via peripheral.stock (direct property)"
-    elseif type(stockProp) == "string" then
-      local ok, comp = pcall(function() return _G.peripheral.find(stockProp) end)
-      if ok and comp then
-        stockTicker = comp
-        stockTickerSide = "indirect"
-        diagLines[#diagLines + 1] = "STOCK TICKER: DETECTED via peripheral.stock type name ('" .. stockProp .. "')"
-      end
-    end
-  end
-
-  -- Deep side-by-side search: enumerate every key on every side's component and
-  -- look for ANY function whose name contains stock/item/list/ticker/detail/filter/request.
-  -- Uses a recursive search so deeply-nested methods (like requestFiltered.getStockItemDetail.list)
-  -- are found regardless of depth.
-  if not stockTicker then
-    _diag("[diag] Starting deep side-by-side stock scan...")
-    for _, sideName in ipairs(sides_to_scan) do
-      local comp = nil
-      local ok = pcall(function()
-        comp = _G.peripheral.wrap(sideName)
-      end)
-      if not ok or not comp then
-        if _G.peripheral and type(_G.peripheral) == "table" then
-          local sideProp = _G.peripheral[sideName]
-          if type(sideProp) == "table" then
-            comp = sideProp
-          end
-        end
-      end
-      if comp and type(comp) == "table" then
-        _diag("[diag] Deep scanning side " .. sideName .. "...")
-        -- Recursive search for stock-related functions at any depth
-        local function deepSearch(tbl, path, depth)
-          if depth > 5 then return false end
-          for k, v in pairs(tbl) do
-            if type(k) == "string" then
-              local lower = string.lower(k)
-              if lower:find("stock") or lower:find("item") or
-                 lower:find("list") or lower:find("ticker") or
-                 lower:find("detail") or lower:find("filter") or
-                 lower:find("request") then
-                if type(v) == "function" then
-                  stockTicker = comp
-                  stockTickerSide = sideName
-                  diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
-                    " via '" .. path .. "." .. k .. "' (function)"
-                  _diag("[diag] FOUND on " .. sideName .. ": " .. path .. "." .. k)
-                  return true
-                elseif type(v) == "table" then
-                  diagLines[#diagLines + 1] = "diag: deep scan '" .. path .. "." .. k .. "' is a table"
-                  _diag("[diag] deep: " .. path .. "." .. k .. " is a table")
-                  if deepSearch(v, path .. "." .. k, depth + 1) then
-                    return true
-                  end
-                end
-              end
-            elseif type(k) == "string" and type(v) == "table" then
-              if deepSearch(v, path .. "." .. k, depth + 1) then
-                return true
-              end
-            end
-          end
-          return false
-        end
-        if deepSearch(comp, "component", 1) then
-          break
-        end
-      else
-        _diag("[diag] side " .. sideName .. " not accessible")
-      end
-    end
-    if not stockTicker then
-      _diag("[diag] Deep scan complete — stock ticker not found on any side")
-    end
-  end
-
-  if not stockTicker then
-    diagLines[#diagLines + 1] = "STOCK TICKER: NOT FOUND — tried type names, peripheral.stock, and side-by-side scan"
-  end
-
-  -- Probe the stock ticker for a production-request method and a stock-reading
-  -- method. We log the candidates but do not call them during startup scan.
-  -- probeProductionMethods is also called from readStockFromTicker after the
-  -- first successful stock read, so the methods get re-confirmed once we know
-  -- the ticker speaks.
-  if stockTicker then
-    local prodCandidates = {}
-    local prodAppend = function(path, fn)
-      table.insert(prodCandidates, { path = path, fn = fn })
-    end
-    for k, v in pairs(stockTicker) do
-      if type(k) == "string" and type(v) == "function" then
-        local lower = string.lower(k)
-        if lower:find("request") or lower:find("create") or lower:find("make") or
-           lower:find("produce") or lower:find("craft") or lower:find("build") or
-           lower:find("manufacture") then
-          prodAppend(k, v)
-        end
-      elseif type(k) == "string" and type(v) == "table" then
-        for nk, nv in pairs(v) do
-          if type(nk) == "string" and type(nv) == "function" then
-            local lower = string.lower(nk)
-            if lower:find("request") or lower:find("create") or lower:find("make") or
-               lower:find("produce") or lower:find("craft") or lower:find("build") or
-               lower:find("manufacture") then
-              prodAppend(k .. "." .. nk, nv)
-            end
-          elseif type(nk) == "string" and type(nv) == "table" then
-            for nnk, nvn in pairs(nv) do
-              if type(nnk) == "string" and type(nvn) == "function" then
-                local lower = string.lower(nnk)
-                if lower:find("request") or lower:find("create") or lower:find("make") or
-                   lower:find("produce") or lower:find("craft") or lower:find("build") then
-                  prodAppend(k .. "." .. nk .. "." .. nnk, nvn)
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-    if #prodCandidates > 0 then
-      local bestPath = prodCandidates[1].path
-      local bestFn = prodCandidates[1].fn
-      for _, c in ipairs(prodCandidates) do
-        -- Prefer ones whose path contains "request" or "create".
-        local lower = string.lower(c.path)
-        if lower:find("request") or lower:find("create") then
-          bestPath = c.path
-          bestFn = c.fn
-          break
-        end
-      end
-      productionFn = bestFn
-      productionFnPath = bestPath
-      diagLines[#diagLines + 1] = "PRODUCTION METHOD: candidate '" .. bestPath .. "' (will probe on first stock read)"
-    else
-      diagLines[#diagLines + 1] = "PRODUCTION METHOD: none found — stock ticker may not support request-creation"
-    end
-
-    -- Also note the strongest stock-reading candidate path for diagnostics.
-    local stockCandidates = {}
-    for k, v in pairs(stockTicker) do
-      if type(k) == "string" and type(v) == "function" then
-        local lower = string.lower(k)
-        if lower:find("stock") or lower:find("item") or lower:find("list") or lower:find("level") then
-          table.insert(stockCandidates, k)
-        end
-      elseif type(k) == "string" and type(v) == "table" then
-        for nk, nv in pairs(v) do
-          if type(nk) == "string" and type(nv) == "function" then
-            local lower = string.lower(nk)
-            if lower:find("stock") or lower:find("item") or lower:find("list") or lower:find("level") then
-              table.insert(stockCandidates, k .. "." .. nk)
-            end
-          end
-        end
-      end
-    end
-    if #stockCandidates > 0 then
-      stockReadMethodPath = stockCandidates[1]
-      for _, p in ipairs(stockCandidates) do
-        local lower = string.lower(p)
-        if lower:find("stock") then
-          stockReadMethodPath = p
-          break
-        end
-      end
-      diagLines[#diagLines + 1] = "STOCK READ METHOD: candidate '" .. stockReadMethodPath .. "'"
-    end
-  end
-
-  -- Print diagnostics to the display and WAIT for keypress
-  if #diagLines > 0 then
-    if onMonitor and monitor and hasFn(monitor, "clear") then
-      pcall(function() monitor.clear() end)
-    elseif has_term and has_term_clear then
-      pcall(function() _G.term.clear() end)
-    end
-
-    dispSetTextScale(0.5)
-
-    local w, h = dispGetSize()
-    local y = 1
-
-    dispSetTextColor(colors.yellow)
-    dispSetCursorPos(1, y)
-    dispWrite("=== PERIPHERAL SCAN ===")
-    y = y + 1
-
-    dispSetTextColor(colors.white)
-    for _, line in ipairs(diagLines) do
-      if y > h then break end
-      if string.find(line, "STOCK TICKER") then
-        dispSetTextColor(colors.green)
-        dispSetCursorPos(1, y)
-        dispWrite(">> " .. line)
-        dispSetTextColor(colors.white)
-      else
-        dispSetCursorPos(1, y)
-        dispWrite(line)
-      end
-      y = y + 1
-    end
-
-    -- If we found a stock ticker, show its callable methods on the MONITOR
-    if stockTicker and y + 2 <= h then
-      y = y + 2
-      dispSetTextColor(colors.darkGray)
-      dispSetCursorPos(1, y)
-      dispWrite("Ticker callable methods:")
-      y = y + 1
-      for k, v in pairs(stockTicker) do
-        if type(k) == "string" and type(v) == "function" then
-          if string.find(k, "stock", 1, true) or string.find(k, "Stock", 1, true) or
-             string.find(k, "item", 1, true) or string.find(k, "Item", 1, true) or
-             string.find(k, "list", 1, true) or string.find(k, "List", 1, true) or
-             string.find(k, "request", 1, true) or string.find(k, "filter", 1, true) then
-            if y > h then break end
-            dispSetCursorPos(2, y)
-            dispWrite(k .. " (fn)")
-            y = y + 1
-          end
-        elseif type(k) == "string" and type(v) == "table" then
-          for nk, nv in pairs(v) do
-            if type(nk) == "string" and type(nv) == "function" then
-              if y > h then break end
-              dispSetCursorPos(2, y)
-              dispWrite(k .. "." .. nk .. " (fn)")
-              y = y + 1
-            end
-          end
-        end
-      end
-    end
-
-    if y <= h then
-      y = y + 1
-      dispSetTextColor(colors.gray)
-      dispSetCursorPos(1, y)
-      dispWrite("Press any key to continue...")
-    end
-
-    -- Mirror to computer's term
-    if has_term and has_term_write then
-      pcall(function() _G.term.clear() end)
-      pcall(function() _G.term.setCursorPos(1, 1) end)
-      for i, line in ipairs(diagLines) do
-        if i > h then break end
-        pcall(function() _G.term.setCursorPos(1, i + 1) end)
-        if string.find(line, "STOCK TICKER") then
-          dispSetTextColor(colors.green)
-          pcall(function() _G.term.write(">> " .. line) end)
-          dispSetTextColor(colors.white)
-        else
-          pcall(function() _G.term.write(line) end)
-        end
-      end
-      local tY = #diagLines + 2
-      if stockTicker then
-        tY = #diagLines + 2
-        pcall(function() _G.term.setCursorPos(1, tY) end)
-        dispSetTextColor(colors.gray)
-        pcall(function() _G.term.write("Ticker callable methods:") end)
-        tY = tY + 1
-        for k, v in pairs(stockTicker) do
-          if type(k) == "string" and type(v) == "function" then
-            if string.find(k, "stock", 1, true) or string.find(k, "Stock", 1, true) or
-               string.find(k, "item", 1, true) or string.find(k, "Item", 1, true) or
-               string.find(k, "list", 1, true) or string.find(k, "List", 1, true) or
-               string.find(k, "request", 1, true) or string.find(k, "filter", 1, true) then
-              pcall(function() _G.term.setCursorPos(2, tY) end)
-              pcall(function() _G.term.write(k .. " (fn)") end)
-              tY = tY + 1
-            end
-          elseif type(k) == "string" and type(v) == "table" then
-            for nk, nv in pairs(v) do
-              if type(nk) == "string" and type(nv) == "function" then
-                pcall(function() _G.term.setCursorPos(2, tY) end)
-                pcall(function() _G.term.write(k .. " (fn)") end)
-                tY = tY + 1
-              end
-            end
-          end
-        end
-      end
-      local promptY = math.max(tY + 1, #diagLines + 2)
-      if promptY < h then
-        pcall(function() _G.term.setCursorPos(1, promptY + 1) end)
-        dispSetTextColor(colors.gray)
-        pcall(function() _G.term.write("Press any key to continue...") end)
-        if has_term_flush then pcall(function() _G.term.flush() end) end
-      end
-    end
-
-    local evt = os.pullEventRaw("key")
-  end
-end
-
--- ---------------------------------------------------------------------------
--- READ STOCK FROM TICKER — comprehensive probing
--- ---------------------------------------------------------------------------
-
-local function readStockFromTicker()
-  stockCache = {}
-  if not stockTicker then return end
-  -- Suppress all probe/debug printing in production — _p is a no-op.
-  local _p = function() end
-
-  -- Debug helper: prints to computer's term
-  local function debugPrint(label, result)
-    local desc
-    if type(result) == "table" then
-      local keys = {}
-      local count = 0
-      for k, v in pairs(result) do
-        count = count + 1
-        if count <= 5 then
-          if type(v) == "table" then
-            local subkeys = {}
-            local subc = 0
-            for sk, sv in pairs(v) do
-              subc = subc + 1
-              if subc <= 3 then subkeys[#subkeys + 1] = sk end
-            end
-            keys[#keys + 1] = k .. "={ " .. table.concat(subkeys, ",") .. " }"
-          else
-            keys[#keys + 1] = k .. "=" .. tostring(v)
-          end
-        end
-      end
-      if count > 5 then keys[#keys + 1] = "...(" .. count .. " keys)" end
-      desc = "table{ " .. table.concat(keys, ", ") .. " }"
-    elseif type(result) == "string" then
-      desc = "string: " .. result
-    elseif type(result) == "number" then
-      desc = "number: " .. result
-    else
-      desc = "type=" .. type(result)
-    end
-    _p("[stock-debug] " .. label .. ": " .. desc)
-  end
-
-  -- Probe function: try calling a function, report result
-  local function tryCall(fn, label, ...)
-    if type(fn) ~= "function" then
-      _p("[stock-probe] " .. label .. " (not a function)")
-      return false, nil
-    end
-    local ok, result = pcall(fn, ...)
-    if not ok then
-      _p("[stock-probe] " .. label .. " FAILED: " .. tostring(result))
-      return false, nil
-    end
-    _p("[stock-probe] " .. label .. " OK — type: " .. type(result))
-    if type(result) == "table" then
-      local keys = {}
-      local kcount = 0
-      for k, v in pairs(result) do
-        kcount = kcount + 1
-        if kcount <= 8 then
-          local vdesc
-          if type(v) == "table" then
-            local sub = {}
-            local sc = 0
-            for sk, sv in pairs(v) do
-              sc = sc + 1; if sc <= 3 then sub[#sub + 1] = sk end
-            end
-            vdesc = "{" .. table.concat(sub, ",") .. "}"
-          elseif type(v) == "string" then
-            vdesc = "\"" .. v .. "\""
-          else
-            vdesc = tostring(v)
-          end
-          keys[#keys + 1] = k .. "=" .. vdesc
-        end
-      end
-      if kcount > 8 then keys[#keys + 1] = "...(" .. kcount .. " keys)" end
-      _p("[stock-probe]   keys: " .. table.concat(keys, ", "))
-    end
-    return true, result
-  end
-
-  local function addItem(id, count)
-    if id ~= "" and count and count > 0 then
-      stockCache[id] = (stockCache[id] or 0) + count
-      _p("[stock-probe]   added: " .. id .. " = " .. count .. " (total: " .. stockCache[id] .. ")")
-    end
-  end
-
-  -- First: enumerate all callable methods for debugging
-  _p("[stock-probe] === STOCK TICKER PROBE ===")
-  _p("[stock-probe] type of stockTicker: " .. type(stockTicker))
-
-  -- Enumerate all functions on the ticker (top-level + nested)
-  local seen = {}
-  local function listFuncs(tbl, prefix)
-    if type(tbl) ~= "table" or seen[tbl] then return end
-    seen[tbl] = true
-    for k, v in pairs(tbl) do
-      local full = prefix and (prefix .. "." .. k) or k
-      if type(v) == "function" then
-        _p("[stock-probe] fn: " .. full)
-      elseif type(v) == "table" then
-        _p("[stock-probe] tbl: " .. full)
-        listFuncs(v, full)
-      end
-    end
-  end
-  listFuncs(stockTicker, nil)
-
-  -- Collect candidate functions
-  local candidates = {}
-  for k, v in pairs(stockTicker) do
-    if type(k) == "string" and type(v) == "function" then
-      if string.lower(k):find("stock") or string.lower(k):find("item") or string.lower(k):find("list") then
-        table.insert(candidates, { path = k, fn = v })
-      end
-    elseif type(k) == "string" and type(v) == "table" then
-      local lower = string.lower(k)
-      if lower:find("stock") or lower:find("request") or lower:find("filter") or lower:find("item") then
-        for nk, nv in pairs(v) do
-          if type(nk) == "string" and type(nv) == "function" then
-            table.insert(candidates, { path = k .. "." .. nk, fn = nv })
-          elseif type(nk) == "string" and type(nv) == "table" then
-            for nnk, nvn in pairs(nv) do
-              if type(nnk) == "string" and type(nvn) == "function" then
-                table.insert(candidates, { path = k .. "." .. nk .. "." .. nnk, fn = nvn })
-              end
-            end
-          end
-        end
-      end
-    end
-  end
-  -- Also check .stock sub-table
-  if stockTicker.stock and type(stockTicker.stock) == "table" then
-    for k, v in pairs(stockTicker.stock) do
-      if type(k) == "string" and type(v) == "function" then
-        table.insert(candidates, { path = "stock." .. k, fn = v })
-      elseif type(k) == "string" and type(v) == "table" then
-        for nk, nv in pairs(v) do
-          if type(nk) == "string" and type(nv) == "function" then
-            table.insert(candidates, { path = "stock." .. k .. "." .. nk, fn = nv })
-          elseif type(nk) == "string" and type(nv) == "table" then
-            for nnk, nvn in pairs(nv) do
-              if type(nnk) == "string" and type(nvn) == "function" then
-                table.insert(candidates, { path = "stock." .. k .. "." .. nk .. "." .. nnk, fn = nvn })
-              end
-            end
-          end
-        end
-      end
-    end
-  end
-  -- Also check .requestFiltered sub-table
-  if stockTicker.requestFiltered and type(stockTicker.requestFiltered) == "table" then
-    for k, v in pairs(stockTicker.requestFiltered) do
-      if type(k) == "string" and type(v) == "function" then
-        table.insert(candidates, { path = "requestFiltered." .. k, fn = v })
-      elseif type(k) == "string" and type(v) == "table" then
-        for nk, nv in pairs(v) do
-          if type(nk) == "string" and type(nv) == "function" then
-            table.insert(candidates, { path = "requestFiltered." .. k .. "." .. nk, fn = nv })
-          elseif type(nk) == "string" and type(nv) == "table" then
-            for nnk, nvn in pairs(nv) do
-              if type(nnk) == "string" and type(nvn) == "function" then
-                table.insert(candidates, { path = "requestFiltered." .. k .. "." .. nk .. "." .. nnk, fn = nvn })
-              end
-            end
-          end
-        end
-      end
-    end
-  end
-
-  _p("[stock-probe] candidates:")
-  for _, c in ipairs(candidates) do
-    _p("[stock-probe]   " .. c.path)
-    local ok, result = tryCall(c.fn, c.path)
-    if ok and result and type(result) == "table" then
-      -- Try to extract items
-      if result.items and type(result.items) == "table" then
-        for _, item in ipairs(result.items) do
-          local id = item.id or item.name or item.displayName or item[1] or ""
-          local count = item.count or item.size or item.amount or item[2] or 0
-          addItem(id, count)
-        end
-        if next(stockCache) then
-          _p("[stock-probe] extracted items, done.")
-          return
-        end
-      elseif result[1] and type(result[1]) == "table" then
-        for _, item in ipairs(result) do
-          local id = item.id or item.name or item.displayName or item[1] or ""
-          local count = item.count or item.size or item.amount or item[2] or 0
-          addItem(id, count)
-        end
-        if next(stockCache) then
-          _p("[stock-probe] extracted items, done.")
-          return
-        end
-      elseif result.id or result.name then
-        local id = result.id or result.name or result.displayName or ""
-        local count = result.count or result.size or result.amount or 1
-        addItem(id, count)
-        if next(stockCache) then
-          _p("[stock-probe] extracted item, done.")
-          return
-        end
-      else
-        -- key-value?
-        for name, count in pairs(result) do
-          if type(count) == "number" and count > 0 then
-            addItem(name, count)
-          end
-        end
-        if next(stockCache) then
-          _p("[stock-probe] extracted items via key-value, done.")
-          return
-        end
-      end
-    end
-  end
-
-  -- Try flat methods on stockTicker itself
-  for _, fnName in ipairs({ "getStock", "getStockLevels", "getStockItems", "getItems", "getItem", "getAllItems" }) do
-    if stockTicker[fnName] and type(stockTicker[fnName]) == "function" then
-      local ok, result = tryCall(stockTicker[fnName], fnName .. "()")
-      if ok and result and type(result) == "table" then
-        if result.items and type(result.items) == "table" then
-          for _, item in ipairs(result.items) do
-            local id = item.id or item.name or item.displayName or item[1] or ""
-            local count = item.count or item.size or item.amount or item[2] or 0
-            addItem(id, count)
-          end
-          if next(stockCache) then
-            _p("[stock-probe] extracted from " .. fnName .. "() items, done.")
-            return
-          end
-        elseif result[1] and type(result[1]) == "table" then
-          for _, item in ipairs(result) do
-            local id = item.id or item.name or item.displayName or item[1] or ""
-            local count = item.count or item.size or item.amount or item[2] or 0
-            addItem(id, count)
-          end
-          if next(stockCache) then
-            _p("[stock-probe] extracted from " .. fnName .. "() array, done.")
-            return
-          end
-        elseif result.id or result.name then
-          local id = result.id or result.name or result.displayName or ""
-          local count = result.count or result.size or result.amount or 1
-          addItem(id, count)
-          if next(stockCache) then
-            _p("[stock-probe] extracted from " .. fnName .. "() single, done.")
-            return
-          end
-        else
-          for name, count in pairs(result) do
-            if type(count) == "number" and count > 0 then
-              addItem(name, count)
-            end
-          end
-          if next(stockCache) then
-            _p("[stock-probe] extracted from " .. fnName .. "() key-value, done.")
-            return
-          end
-        end
-      end
-    end
-  end
-
-  if not next(stockCache) then
-    _p("[stock-probe] ERROR: no stock data extracted from any method")
-  else
-    _p("[stock-probe] stockCache:")
-    for id, count in pairs(stockCache) do
-      _p("[stock-probe]   " .. id .. ": " .. count)
-    end
-  end
-end
-
--- ---------------------------------------------------------------------------
--- MENU RENDERING
--- ---------------------------------------------------------------------------
 
 local function drawHeader(title)
   local w, h = termGetSize()
@@ -1228,37 +523,6 @@ local dashboardBlinkPhase = 0
 local lastDashboardDrawY = 0
 
 -- PRODUCTION REQUEST — talk to the stock ticker
--- ---------------------------------------------------------------------------
---
--- requestProductionForGauges(gauges) asks the stock ticker to produce enough
--- of each item to cover the shortfall on every working gauge. The ticker's API
--- varies by mod; we try the production method we discovered during scanning,
--- passing item name + count. If the method has a different signature we log a
--- diagnostic and move on.
-
-local function requestProductionForGauges(gauges)
-  if not productionFn or type(productionFn) ~= "function" then
-    return
-  end
-  for _, g in ipairs(gauges) do
-    if gaugeWorking(g) then
-      local stock = stockForGauge(g)
-      local needed = neededCount(g)
-      local shortfall = needed - stock
-      if shortfall > 0 then
-        local itemName = gaugeItemName(g)
-        local ok, err = pcall(productionFn, itemName, shortfall)
-        if not ok then
-          _diag("[prod] requestProduction failed for " .. itemName .. " (" .. shortfall .. "): " .. tostring(err))
-        else
-          _diag("[prod] requested " .. shortfall .. " of " .. itemName .. " for gauge '" .. g.name .. "'")
-        end
-      end
-    end
-  end
-end
-local function drawDashboard(w, startY)
-  local h = 19  -- default; will be corrected below
   local _, realH = dispGetSize()
   if realH and realH > 0 then h = realH end
 
@@ -1278,7 +542,7 @@ local function drawDashboard(w, startY)
     if gaugeWorking(g) then
       anyWorking = true
       if y >= h - 2 then break end  -- leave room for total + hint
-      local stock = stockForGauge(g)
+      local stock = 0
       local needed = neededCount(g)
       local shortName = g.name
       if #shortName > w - 20 then
@@ -1325,7 +589,7 @@ local function drawDashboard(w, startY)
     local shortfall = 0
     for _, g in ipairs(gauges) do
       if gaugeWorking(g) then
-        local s = stockForGauge(g)
+        local s = 0
         local n = neededCount(g)
         if s < n then
           shortfall = shortfall + (n - s)
@@ -1335,24 +599,6 @@ local function drawDashboard(w, startY)
     if shortfall > 0 then
       dispSetTextColor(colors.red)
       dispSetCursorPos(2, y)
-      local hint = "SHORTFALL: " .. shortfall .. " — requesting production..."
-      if #hint > w - 2 then hint = string.sub(hint, 1, w - 2) end
-      dispWrite(hint .. string.rep(" ", math.max(1, w - #hint)))
-      y = y + 1
-      -- Trigger production request for all shortfalls
-      requestProductionForGauges(gauges)
-    else
-      if anyWorking then
-        dispSetTextColor(colors.green)
-        dispSetCursorPos(2, y)
-        local okTxt = "All gauges covered — no shortfall"
-        if #okTxt > w - 2 then okTxt = string.sub(okTxt, 1, w - 2) end
-        dispWrite(okTxt .. string.rep(" ", math.max(1, w - #okTxt)))
-        y = y + 1
-      end
-    end
-  end
-
   -- Inactive gauges at the bottom
   local inactiveY = h - 1
   if y < inactiveY then
@@ -1422,35 +668,6 @@ local function drawMainMenu()
     ty = ty + 1
   end
 
-  -- Stock overview on the computer term
-  ty = ty + 1
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, ty)
-  termWrite("STOCK:")
-  ty = ty + 1
-  if next(stockCache) then
-    local itemList = {}
-    for id, count in pairs(stockCache) do
-      table.insert(itemList, { id = id, count = count })
-    end
-    table.sort(itemList, function(a, b) return a.count > b.count end)
-    local show = math.min(#itemList, 6)
-    for i = 1, show do
-      local short = string.match(itemList[i].id, "^%w+:(.+)$") or itemList[i].id
-      termSetCursorPos(2, ty)
-      termWrite(i .. ". " .. short .. ": " .. itemList[i].count)
-      ty = ty + 1
-    end
-    if #itemList > show then
-      termSetCursorPos(2, ty)
-      termWrite("... and " .. (#itemList - show) .. " more")
-      ty = ty + 1
-    end
-  else
-    termSetCursorPos(2, ty)
-    termSetTextColor(colors.gray)
-    termWrite("  (no stock data -- check stock ticker connection)")
-    ty = ty + 1
   end
 
   -- Usage hint at the bottom of the computer term
@@ -1698,14 +915,10 @@ local function showSettings()
   termSetCursorPos(1, 7)
   termWriteLn("  Monitor auto-detect:    " .. (onMonitor and "Enabled" or "Disabled"))
   termSetCursorPos(1, 8)
-  termWriteLn("  Stock ticker:           " .. (stockTicker and "Connected" or "Not found"))
   termSetCursorPos(1, 9)
-  if next(stockCache) then
     termSetTextColor(colors.white)
-    termWriteLn("  Items in stock:         " .. countTable(stockCache))
   else
     termSetTextColor(colors.gray)
-    termWriteLn("  Items in stock:         0")
   end
   termSetCursorPos(1, 11)
   termSetTextColor(colors.darkGray)
@@ -2024,7 +1237,7 @@ local function showGaugeEditor(g)
     termWrite("Needed: " .. g.qty .. " " .. g.mode .. "s  (" .. neededTxt .. ")")
     y = y + 1
 
-    local stock = stockForGauge(g)
+    local stock = 0
     termSetCursorPos(1, y)
     if stock >= neededCount(g) then
       termSetTextColor(colors.green)
@@ -2101,7 +1314,6 @@ end
 
 local function main()
   local _diag = function() end
-  scanAllSides()
 
   -- Load frog ports from sign text if available, else defaults
   local clipboardNames = {}
@@ -2131,7 +1343,6 @@ local function main()
   currentScreen = "main"
 
   -- Read initial stock from ticker — results go to computer's term via print()
-  readStockFromTicker()
 
   if onMonitor then
     dispClear()
@@ -2170,9 +1381,24 @@ local function main()
         elseif evt == "char" or evt == "key" or evt == "key_down" or evt == "key_up" then
           local key
           if evt == "char" then
-            key = type(data) == "string" and #data == 1 and string.lower(data) or nil
+            -- Only process letter keys from char events. This avoids double-
+            -- firing when CC:T emits both a "char" and "key" event for one
+            -- physical press (which caused W/S to skip 2-3 menu items).
+            local c = type(data) == "string" and #data == 1 and string.lower(data) or nil
+            if c and c:match("^[a-z]$") then
+              key = c
+            else
+              key = nil
+            end
           elseif evt == "key" or evt == "key_down" or evt == "key_up" then
-            key = KEY_LABEL[data] or data
+            -- Only process special keys (enter, arrows, escape) from key events.
+            -- Ignore key codes for letter keys — those come through as "char".
+            local label = KEY_LABEL[data] or data
+            if label == "enter" or label == "up" or label == "down" or label == "escape" then
+              key = label
+            else
+              key = nil
+            end
           else
             key = nil
           end
@@ -2234,25 +1460,21 @@ local function main()
       showCreateFactoryGauge()
       currentScreen = "main"
       selectedIndex = 1
-      readStockFromTicker()
 
     elseif currentScreen == "workinggauges" then
       showWorkingGaugesList()
       currentScreen = "main"
       selectedIndex = 2
-      readStockFromTicker()
 
     elseif currentScreen == "frogport" then
       showFrogPortList()
       currentScreen = "main"
       selectedIndex = 3
-      readStockFromTicker()
 
     elseif currentScreen == "settings" then
       showSettings()
       currentScreen = "main"
       selectedIndex = 4
-      readStockFromTicker()
     end
   end
 
