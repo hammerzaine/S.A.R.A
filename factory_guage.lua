@@ -429,6 +429,7 @@ end
 
 local function neededCount(g)
   return g.qty
+  end
 end
 
 local function gaugeWorking(g)
@@ -588,21 +589,6 @@ local lastDashboardDrawY = 0
     y = y + 1
   end
 
-  -- Production status / shortfall hint
-  if y < h then
-    local shortfall = 0
-    for _, g in ipairs(gauges) do
-      if gaugeWorking(g) then
-        local s = 0
-        local n = neededCount(g)
-        if s < n then
-          shortfall = shortfall + (n - s)
-        end
-      end
-    end
-    if shortfall > 0 then
-      dispSetTextColor(colors.red)
-      dispSetCursorPos(2, y)
   -- Inactive gauges at the bottom
   local inactiveY = h - 1
   if y < inactiveY then
@@ -919,6 +905,11 @@ local function showSettings()
   termSetCursorPos(1, 7)
   termWriteLn("  Monitor auto-detect:    " .. (onMonitor and "Enabled" or "Disabled"))
   termSetCursorPos(1, 8)
+  termSetCursorPos(1, 9)
+    termSetTextColor(colors.white)
+  else
+    termSetTextColor(colors.gray)
+  end
   termSetCursorPos(1, 11)
   termSetTextColor(colors.darkGray)
   termWriteLn("")
