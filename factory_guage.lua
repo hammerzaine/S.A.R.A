@@ -21,10 +21,10 @@ local has_term_setTextScale = has_term and hasFn(_G.term, "setTextScale")
 local has_colors        = _G.colors and type(_G.colors) == "table"
 local has_io            = _G.io and type(_G.io.read) == "function"
 
-if has_peripheral_find then print("[diag] peripheral.find: AVAILABLE") end
-if has_term then print("[diag] term: AVAILABLE") end
-if has_colors then print("[diag] colors: AVAILABLE") end
-if has_io then print("[diag] io.read: AVAILABLE") end
+if has_peripheral_find then _diag("[diag] peripheral.find: AVAILABLE") end
+if has_term then _diag("[diag] term: AVAILABLE") end
+if has_colors then _diag("[diag] colors: AVAILABLE") end
+if has_io then _diag("[diag] io.read: AVAILABLE") end
 
 -- ---------------------------------------------------------------------------
 -- MONITOR AUTO-DETECTION
@@ -37,12 +37,12 @@ if has_peripheral_find then
   monitor = _G.peripheral.find("monitor")
   if monitor then
     onMonitor = true
-    print("[diag] monitor: DETECTED")
+    _diag("[diag] monitor: DETECTED")
   else
-    print("[diag] monitor: NOT FOUND — using terminal")
+    _diag("[diag] monitor: NOT FOUND — using terminal")
   end
 else
-  print("[diag] monitor: peripheral.find unavailable")
+  _diag("[diag] monitor: peripheral.find unavailable")
 end
 
 local display = monitor or term
@@ -118,18 +118,6 @@ local function dispClear()
     pcall(function() monitor.clear() end)
   elseif has_term and has_term_clear then
     pcall(function() _G.term.clear() end)
-  end
-  if has_term and has_term_clear and has_term_write and has_colors then
-    pcall(function() _G.term.clear() end)
-    pcall(function() _G.term.setCursorPos(1, 1) end)
-    dispSetTextColor(colors.green)
-    pcall(function() _G.term.write("Factory Gauge — monitor active") end)
-    dispSetTextColor(colors.gray)
-    pcall(function() _G.term.setCursorPos(1, 2) end)
-    pcall(function() _G.term.write("Use THIS computer's keyboard to control") end)
-    pcall(function() _G.term.setCursorPos(1, 3) end)
-    pcall(function() _G.term.write("W/S: navigate  |  Enter: select  |  Q: back/quit") end)
-    termFlush()
   end
 end
 
@@ -641,7 +629,7 @@ local function scanAllSides()
   -- Uses a recursive search so deeply-nested methods (like requestFiltered.getStockItemDetail.list)
   -- are found regardless of depth.
   if not stockTicker then
-    print("[diag] Starting deep side-by-side stock scan...")
+    _diag("[diag] Starting deep side-by-side stock scan...")
     for _, sideName in ipairs(sides_to_scan) do
       local comp = nil
       local ok = pcall(function()
@@ -656,7 +644,7 @@ local function scanAllSides()
         end
       end
       if comp and type(comp) == "table" then
-        print("[diag] Deep scanning side " .. sideName .. "...")
+        _diag("[diag] Deep scanning side " .. sideName .. "...")
         -- Recursive search for stock-related functions at any depth
         local function deepSearch(tbl, path, depth)
           if depth > 5 then return false end
@@ -672,11 +660,11 @@ local function scanAllSides()
                   stockTickerSide = sideName
                   diagLines[#diagLines + 1] = "STOCK TICKER: FOUND on side " .. sideName ..
                     " via '" .. path .. "." .. k .. "' (function)"
-                  print("[diag] FOUND on " .. sideName .. ": " .. path .. "." .. k)
+                  _diag("[diag] FOUND on " .. sideName .. ": " .. path .. "." .. k)
                   return true
                 elseif type(v) == "table" then
                   diagLines[#diagLines + 1] = "diag: deep scan '" .. path .. "." .. k .. "' is a table"
-                  print("[diag] deep: " .. path .. "." .. k .. " is a table")
+                  _diag("[diag] deep: " .. path .. "." .. k .. " is a table")
                   if deepSearch(v, path .. "." .. k, depth + 1) then
                     return true
                   end
@@ -694,11 +682,11 @@ local function scanAllSides()
           break
         end
       else
-        print("[diag] side " .. sideName .. " not accessible")
+        _diag("[diag] side " .. sideName .. " not accessible")
       end
     end
     if not stockTicker then
-      print("[diag] Deep scan complete — stock ticker not found on any side")
+      _diag("[diag] Deep scan complete — stock ticker not found on any side")
     end
   end
 
@@ -932,6 +920,8 @@ end
 local function readStockFromTicker()
   stockCache = {}
   if not stockTicker then return end
+  -- Suppress all probe/debug printing in production — _p is a no-op.
+  local _p = function() end
 
   -- Debug helper: prints to computer's term
   local function debugPrint(label, result)
@@ -964,21 +954,21 @@ local function readStockFromTicker()
     else
       desc = "type=" .. type(result)
     end
-    print("[stock-debug] " .. label .. ": " .. desc)
+    _p("[stock-debug] " .. label .. ": " .. desc)
   end
 
   -- Probe function: try calling a function, report result
   local function tryCall(fn, label, ...)
     if type(fn) ~= "function" then
-      print("[stock-probe] " .. label .. " (not a function)")
+      _p("[stock-probe] " .. label .. " (not a function)")
       return false, nil
     end
     local ok, result = pcall(fn, ...)
     if not ok then
-      print("[stock-probe] " .. label .. " FAILED: " .. tostring(result))
+      _p("[stock-probe] " .. label .. " FAILED: " .. tostring(result))
       return false, nil
     end
-    print("[stock-probe] " .. label .. " OK — type: " .. type(result))
+    _p("[stock-probe] " .. label .. " OK — type: " .. type(result))
     if type(result) == "table" then
       local keys = {}
       local kcount = 0
@@ -1002,7 +992,7 @@ local function readStockFromTicker()
         end
       end
       if kcount > 8 then keys[#keys + 1] = "...(" .. kcount .. " keys)" end
-      print("[stock-probe]   keys: " .. table.concat(keys, ", "))
+      _p("[stock-probe]   keys: " .. table.concat(keys, ", "))
     end
     return true, result
   end
@@ -1010,13 +1000,13 @@ local function readStockFromTicker()
   local function addItem(id, count)
     if id ~= "" and count and count > 0 then
       stockCache[id] = (stockCache[id] or 0) + count
-      print("[stock-probe]   added: " .. id .. " = " .. count .. " (total: " .. stockCache[id] .. ")")
+      _p("[stock-probe]   added: " .. id .. " = " .. count .. " (total: " .. stockCache[id] .. ")")
     end
   end
 
   -- First: enumerate all callable methods for debugging
-  print("[stock-probe] === STOCK TICKER PROBE ===")
-  print("[stock-probe] type of stockTicker: " .. type(stockTicker))
+  _p("[stock-probe] === STOCK TICKER PROBE ===")
+  _p("[stock-probe] type of stockTicker: " .. type(stockTicker))
 
   -- Enumerate all functions on the ticker (top-level + nested)
   local seen = {}
@@ -1026,9 +1016,9 @@ local function readStockFromTicker()
     for k, v in pairs(tbl) do
       local full = prefix and (prefix .. "." .. k) or k
       if type(v) == "function" then
-        print("[stock-probe] fn: " .. full)
+        _p("[stock-probe] fn: " .. full)
       elseif type(v) == "table" then
-        print("[stock-probe] tbl: " .. full)
+        _p("[stock-probe] tbl: " .. full)
         listFuncs(v, full)
       end
     end
@@ -1100,9 +1090,9 @@ local function readStockFromTicker()
     end
   end
 
-  print("[stock-probe] candidates:")
+  _p("[stock-probe] candidates:")
   for _, c in ipairs(candidates) do
-    print("[stock-probe]   " .. c.path)
+    _p("[stock-probe]   " .. c.path)
     local ok, result = tryCall(c.fn, c.path)
     if ok and result and type(result) == "table" then
       -- Try to extract items
@@ -1113,7 +1103,7 @@ local function readStockFromTicker()
           addItem(id, count)
         end
         if next(stockCache) then
-          print("[stock-probe] extracted items, done.")
+          _p("[stock-probe] extracted items, done.")
           return
         end
       elseif result[1] and type(result[1]) == "table" then
@@ -1123,7 +1113,7 @@ local function readStockFromTicker()
           addItem(id, count)
         end
         if next(stockCache) then
-          print("[stock-probe] extracted items, done.")
+          _p("[stock-probe] extracted items, done.")
           return
         end
       elseif result.id or result.name then
@@ -1131,7 +1121,7 @@ local function readStockFromTicker()
         local count = result.count or result.size or result.amount or 1
         addItem(id, count)
         if next(stockCache) then
-          print("[stock-probe] extracted item, done.")
+          _p("[stock-probe] extracted item, done.")
           return
         end
       else
@@ -1142,7 +1132,7 @@ local function readStockFromTicker()
           end
         end
         if next(stockCache) then
-          print("[stock-probe] extracted items via key-value, done.")
+          _p("[stock-probe] extracted items via key-value, done.")
           return
         end
       end
@@ -1161,7 +1151,7 @@ local function readStockFromTicker()
             addItem(id, count)
           end
           if next(stockCache) then
-            print("[stock-probe] extracted from " .. fnName .. "() items, done.")
+            _p("[stock-probe] extracted from " .. fnName .. "() items, done.")
             return
           end
         elseif result[1] and type(result[1]) == "table" then
@@ -1171,7 +1161,7 @@ local function readStockFromTicker()
             addItem(id, count)
           end
           if next(stockCache) then
-            print("[stock-probe] extracted from " .. fnName .. "() array, done.")
+            _p("[stock-probe] extracted from " .. fnName .. "() array, done.")
             return
           end
         elseif result.id or result.name then
@@ -1179,7 +1169,7 @@ local function readStockFromTicker()
           local count = result.count or result.size or result.amount or 1
           addItem(id, count)
           if next(stockCache) then
-            print("[stock-probe] extracted from " .. fnName .. "() single, done.")
+            _p("[stock-probe] extracted from " .. fnName .. "() single, done.")
             return
           end
         else
@@ -1189,7 +1179,7 @@ local function readStockFromTicker()
             end
           end
           if next(stockCache) then
-            print("[stock-probe] extracted from " .. fnName .. "() key-value, done.")
+            _p("[stock-probe] extracted from " .. fnName .. "() key-value, done.")
             return
           end
         end
@@ -1198,11 +1188,11 @@ local function readStockFromTicker()
   end
 
   if not next(stockCache) then
-    print("[stock-probe] ERROR: no stock data extracted from any method")
+    _p("[stock-probe] ERROR: no stock data extracted from any method")
   else
-    print("[stock-probe] stockCache:")
+    _p("[stock-probe] stockCache:")
     for id, count in pairs(stockCache) do
-      print("[stock-probe]   " .. id .. ": " .. count)
+      _p("[stock-probe]   " .. id .. ": " .. count)
     end
   end
 end
@@ -1255,9 +1245,9 @@ local function requestProductionForGauges(gauges)
         local itemName = gaugeItemName(g)
         local ok, err = pcall(productionFn, itemName, shortfall)
         if not ok then
-          print("[prod] requestProduction failed for " .. itemName .. " (" .. shortfall .. "): " .. tostring(err))
+          _diag("[prod] requestProduction failed for " .. itemName .. " (" .. shortfall .. "): " .. tostring(err))
         else
-          print("[prod] requested " .. shortfall .. " of " .. itemName .. " for gauge '" .. g.name .. "'")
+          _diag("[prod] requested " .. shortfall .. " of " .. itemName .. " for gauge '" .. g.name .. "'")
         end
       end
     end
@@ -2106,6 +2096,7 @@ local function countTable(t)
 end
 
 local function main()
+  local _diag = function() end
   scanAllSides()
 
   -- Load frog ports from sign text if available, else defaults
