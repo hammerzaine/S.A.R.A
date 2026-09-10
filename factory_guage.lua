@@ -18,9 +18,13 @@ local has_term_setTextColor = has_term and hasFn(_G.term, "setTextColor")
 local has_term_setBackgroundColor = has_term and hasFn(_G.term, "setBackgroundColor")
 local has_term_flush    = has_term and hasFn(_G.term, "flush")
 local has_term_setTextScale = has_term and hasFn(_G.term, "setTextScale")
-local has_colors        = _G.colors and type(_G.colors) == "table"
+local has_colors        = _G.colors and type(_G.colors) == "table" and
+                            type(_G.colors.green) ~= "nil"
 local has_io            = _G.io and type(_G.io.read) == "function"
-
+local has_peripheral_find = _G.peripheral and type(_G.peripheral.find) == "function"
+-- Suppress all diagnostic output at file scope: _diag is a no-op until main()
+-- reassigns it; defined here so the file-scope calls at lines 24-45 never throw.
+local _diag = function() end
 if has_peripheral_find then _diag("[diag] peripheral.find: AVAILABLE") end
 if has_term then _diag("[diag] term: AVAILABLE") end
 if has_colors then _diag("[diag] colors: AVAILABLE") end
