@@ -358,33 +358,23 @@ local function readkey()
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
-      -- Only process letter keys from char events. CC:T emits both a "char"
-      -- and a "key" event for one physical press; by handling letters only
-      -- from "char" and special keys only from "key", each press = one action.
       if type(data) == "string" and #data == 1 then
-        local c = string.lower(data)
-        if c:match("^[a-z]$") then
-          return c
-        end
+        return string.lower(data)
       end
     elseif evt == "key" or evt == "key_down" or evt == "key_up" then
       if type(data) == "number" then
         local label = KEY_LABEL[data]
         if label then
-          -- Only return special keys from key events; letters come via "char".
-          if label == "enter" or label == "up" or label == "down" or label == "escape" then
-            return label
-          end
+          return label
         end
-        -- Unknown numeric key code — ignore.
+        -- Unknown numeric key code — ignore (could be a modifier or
+        -- an unrecognised key on this CC:T build).
       elseif type(data) == "string" and #data == 1 then
         -- Some builds pass a single-char string where we'd expect a number.
-        local c = string.lower(data)
-        if c:match("^[a-z]$") then
-          return c
-        end
+        return string.lower(data)
       end
     elseif evt == nil then
+      -- No more events.
       return nil
     end
     -- Any other event type (timer, etc.): ignore and loop.
@@ -426,8 +416,10 @@ local function gaugeItemName(g)
   return g.name
 end
 
+
 local function neededCount(g)
   return g.qty
+  end
 end
 
 local function gaugeWorking(g)
@@ -495,6 +487,16 @@ local function countTotalStock()
   return total
 end
 
+
+-- ---------------------------------------------------------------------------
+-- READ STOCK FROM TICKER — comprehensive probing
+-- ---------------------------------------------------------------------------
+
+
+-- ---------------------------------------------------------------------------
+-- MENU RENDERING
+-- ---------------------------------------------------------------------------
+
 local function drawHeader(title)
   local w, h = termGetSize()
   termClear()
@@ -518,8 +520,6 @@ local dashboardBlinkPhase = 0
 local lastDashboardDrawY = 0
 
 -- PRODUCTION REQUEST — talk to the stock ticker
-  local _, realH = dispGetSize()
-  if realH and realH > 0 then h = realH end
 
   local y = startY
   dispSetTextColor(colors.white)
@@ -910,6 +910,11 @@ local function showSettings()
   termSetCursorPos(1, 7)
   termWriteLn("  Monitor auto-detect:    " .. (onMonitor and "Enabled" or "Disabled"))
   termSetCursorPos(1, 8)
+  termSetCursorPos(1, 9)
+    termSetTextColor(colors.white)
+  else
+    termSetTextColor(colors.gray)
+  end
   termSetCursorPos(1, 11)
   termSetTextColor(colors.darkGray)
   termWriteLn("")
@@ -1371,24 +1376,9 @@ local function main()
         elseif evt == "char" or evt == "key" or evt == "key_down" or evt == "key_up" then
           local key
           if evt == "char" then
-            -- Only process letter keys from char events. This avoids double-
-            -- firing when CC:T emits both a "char" and "key" event for one
-            -- physical press (which caused W/S to skip 2-3 menu items).
-            local c = type(data) == "string" and #data == 1 and string.lower(data) or nil
-            if c and c:match("^[a-z]$") then
-              key = c
-            else
-              key = nil
-            end
+            key = type(data) == "string" and #data == 1 and string.lower(data) or nil
           elseif evt == "key" or evt == "key_down" or evt == "key_up" then
-            -- Only process special keys (enter, arrows, escape) from key events.
-            -- Ignore key codes for letter keys — those come through as "char".
-            local label = KEY_LABEL[data] or data
-            if label == "enter" or label == "up" or label == "down" or label == "escape" then
-              key = label
-            else
-              key = nil
-            end
+            key = KEY_LABEL[data] or data
           else
             key = nil
           end
