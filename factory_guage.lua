@@ -898,14 +898,14 @@ local function scanAllSides()
                string.find(k, "list", 1, true) or string.find(k, "List", 1, true) or
                string.find(k, "request", 1, true) or string.find(k, "filter", 1, true) then
               pcall(function() _G.term.setCursorPos(2, tY) end)
-              pcall(function() _G.term.write(k .. " (fn) end)")
+              pcall(function() _G.term.write(k .. " (fn)") end)
               tY = tY + 1
             end
           elseif type(k) == "string" and type(v) == "table" then
             for nk, nv in pairs(v) do
               if type(nk) == "string" and type(nv) == "function" then
                 pcall(function() _G.term.setCursorPos(2, tY) end)
-                pcall(function() _G.term.write(k .. "." .. nk .. " (fn) end)")
+                pcall(function() _G.term.write(k .. " (fn)") end)
                 tY = tY + 1
               end
             end
