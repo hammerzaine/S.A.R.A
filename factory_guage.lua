@@ -1272,7 +1272,7 @@ local function drawDashboard(w, startY)
   dispSetTextColor(colors.white)
   dispSetBackgroundColor(colors.black)
   dispSetCursorPos(1, y)
-  dispWrite("WORKING GAUGES (monitor)")
+  dispWrite("WORKING GAUGES")
   y = y + 1
 
   local gauges = sortedGauges()
@@ -1473,14 +1473,14 @@ local function drawMainMenu()
     dispSetTextScale(1.0)
     dispSetBackgroundColor(colors.black)
     dispSetTextColor(colors.yellow)
-    local titleLen = #"FACTORY GAUGE (monitor)"
+    local titleLen = #"FACTORY GAUGE"
     local pad = math.floor((mw - titleLen) / 2)
     if pad < 0 then pad = 0 end
     dispSetCursorPos(1, 1)
     dispWrite(string.rep("=", mw))
     dispWriteLn()
     dispSetCursorPos(1, 2)
-    dispWrite(string.rep(" ", pad) .. "FACTORY GAUGE (monitor)" .. string.rep(" ", mw - pad - titleLen))
+    dispWrite(string.rep(" ", pad) .. "FACTORY GAUGE" .. string.rep(" ", mw - pad - titleLen))
     dispWriteLn()
     dispWrite(string.rep("=", mw))
     dispWriteLn()
@@ -2141,9 +2141,9 @@ local function main()
   if onMonitor then
     dispClear()
     dispSetCursorPos(1, 1)
-    dispSetTextColor(colors.green)
-    dispWrite("Monitor ready. Keyboard input goes through the")
-    dispWriteLn("computer — use the computer's keyboard.")
+    termSetTextColor(colors.green)
+    pcall(function() _G.term.write("Monitor ready. Keyboard input goes through the") end)
+    pcall(function() _G.term.write("computer — use the computer's keyboard.") end)
     sleep(2)
   end
 
