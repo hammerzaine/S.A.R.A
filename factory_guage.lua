@@ -85,34 +85,6 @@ local function prompt(text)
     end
 end
 
-local function dispClear()
-  if onMonitor and monitor and hasFn(monitor, "clear") then
-    pcall(function() monitor.clear() end)
-  elseif has_term and has_term_clear then
-    pcall(function() _G.term.clear() end)
-  end
-  if has_term and has_term_clear and has_term_write then
-    pcall(function() _G.term.clear() end)
-    pcall(function() _G.term.setCursorPos(1, 1) end)
-    dispSetTextColor(colors.green)
-    pcall(function() _G.term.write("Factory Gauge — monitor active") end)
-    dispSetTextColor(colors.gray)
-    pcall(function() _G.term.setCursorPos(1, 2) end)
-    pcall(function() _G.term.write("Use THIS computer's keyboard to control") end)
-    pcall(function() _G.term.setCursorPos(1, 3) end)
-    pcall(function() _G.term.write("W/S: navigate  |  Enter: select  |  Q: back/quit") end)
-    termFlush()
-  end
-end
-
-local function dispSetCursorPos(x, y)
-  if onMonitor and monitor and hasFn(monitor, "setCursorPos") then
-    pcall(function() monitor.setCursorPos(x, y) end)
-  elseif has_term and has_term_setCursorPos then
-    pcall(function() _G.term.setCursorPos(x, y) end)
-  end
-end
-
 local function dispSetTextColor(c)
     local finalColor = c
     if not finalColor and has_colors then
@@ -140,6 +112,34 @@ local function dispSetBackgroundColor(c)
     end
 end
 
+
+local function dispClear()
+  if onMonitor and monitor and hasFn(monitor, "clear") then
+    pcall(function() monitor.clear() end)
+  elseif has_term and has_term_clear then
+    pcall(function() _G.term.clear() end)
+  end
+  if has_term and has_term_clear and has_term_write and has_colors then
+    pcall(function() _G.term.clear() end)
+    pcall(function() _G.term.setCursorPos(1, 1) end)
+    dispSetTextColor(colors.green)
+    pcall(function() _G.term.write("Factory Gauge — monitor active") end)
+    dispSetTextColor(colors.gray)
+    pcall(function() _G.term.setCursorPos(1, 2) end)
+    pcall(function() _G.term.write("Use THIS computer's keyboard to control") end)
+    pcall(function() _G.term.setCursorPos(1, 3) end)
+    pcall(function() _G.term.write("W/S: navigate  |  Enter: select  |  Q: back/quit") end)
+    termFlush()
+  end
+end
+
+local function dispSetCursorPos(x, y)
+  if onMonitor and monitor and hasFn(monitor, "setCursorPos") then
+    pcall(function() monitor.setCursorPos(x, y) end)
+  elseif has_term and has_term_setCursorPos then
+    pcall(function() _G.term.setCursorPos(x, y) end)
+  end
+end
 -- Set text scale on monitor (1 = default, 0.5 = smaller, 2 = larger).
 local function dispSetTextScale(scale)
   if onMonitor and monitor and hasFn(monitor, "setTextScale") then
