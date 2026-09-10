@@ -426,13 +426,8 @@ local function gaugeItemName(g)
   return g.name
 end
 
-  end
-  return 0
-end
-
 local function neededCount(g)
   return g.qty
-  end
 end
 
 local function gaugeWorking(g)
