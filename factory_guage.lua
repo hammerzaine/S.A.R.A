@@ -282,21 +282,15 @@ local function readlnWithEcho(promptText)
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
+      -- Only handle actual typed characters here. CC:T also fires a matching
+      -- "key" event for Enter/Backspace; those are handled below so we don't
+      -- double-process one physical keypress.
       local c = data
-      if c == "\n" or c == "\r" then
-        -- Finalise: move to a new line on both displays.
-        dispWriteLn("")
-        if has_term and has_term_write then
-          pcall(function() _G.term.write("\n") end)
-          termFlush()
-        end
-        break
-      elseif c == "\b" or c == "\127" then
-        if #t > 0 then
-          table.remove(t)
-          echoChar(nil)  -- erase last char from screen
-        end
-      elseif type(c) == "string" and #c > 0 then
+      if type(c) ~= "string" or #c ~= 1 then
+        -- ignore multi-char / non-string char events
+      elseif c == "\n" or c == "\r" or c == "\b" or c == "\127" then
+        -- Ignore control chars from char events; they come via "key" below.
+      else
         t[#t + 1] = c
         echoChar(c)
       end
@@ -321,6 +315,23 @@ local function readlnWithEcho(promptText)
   local line = table.concat(t)
   if line == "" then return nil end
   return line
+end
+
+-- Drain any leftover events from the queue (CC:T fires both "char" and
+-- "key" for one physical Enter/space press; the "key" lingers and gets
+-- picked up by the next loop iteration, causing sub-menus to bounce
+-- back to main, or W/S to skip an extra item).
+local function drainEventQueue()
+  -- Start a timer that fires in 0.01s, then pull events until that timer
+  -- fires. This is the standard CC:T pattern for non-blocking drain.
+  local drainTimer = os.startTimer(0.01)
+  while true do
+    local evt, data = os.pullEvent()
+    if evt == "timer" and data == drainTimer then
+      break
+    end
+    -- Discard any other event: char, key, mouse, etc.
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1366,12 +1377,15 @@ local function main()
         elseif evt == "char" or evt == "key" or evt == "key_down" or evt == "key_up" then
           local key
           if evt == "char" then
-            -- Only process letter keys from char events. This avoids double-
-            -- firing when CC:T emits both a "char" and "key" event for one
-            -- physical press (which caused W/S to skip 2-3 menu items).
+            -- Only process letter keys from char events. CC:T emits both a "char"
+            -- and a "key" event for one physical press; by handling letters only
+            -- from "char" and special keys only from "key", each press = one action.
             local c = type(data) == "string" and #data == 1 and string.lower(data) or nil
             if c and c:match("^[a-z]$") then
               key = c
+              -- Drain the matching "key" event that CC:T fires for the same press
+              -- so it doesn't get processed on the next loop iteration.
+              drainEventQueue()
             else
               key = nil
             end
@@ -1411,6 +1425,7 @@ local function main()
               elseif selectedIndex == 4 then
                 currentScreen = "settings"
               end
+              drainEventQueue()
               break
             elseif isUp then
               if selectedIndex > 1 then
@@ -1443,21 +1458,25 @@ local function main()
 
     elseif currentScreen == "create" then
       showCreateFactoryGauge()
+      drainEventQueue()
       currentScreen = "main"
       selectedIndex = 1
 
     elseif currentScreen == "workinggauges" then
       showWorkingGaugesList()
+      drainEventQueue()
       currentScreen = "main"
       selectedIndex = 2
 
     elseif currentScreen == "frogport" then
       showFrogPortList()
+      drainEventQueue()
       currentScreen = "main"
       selectedIndex = 3
 
     elseif currentScreen == "settings" then
       showSettings()
+      drainEventQueue()
       currentScreen = "main"
       selectedIndex = 4
     end
