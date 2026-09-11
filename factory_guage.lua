@@ -379,27 +379,22 @@ local function readkey()
           return c
         end
       end
-    elseif evt == "key" or evt == "key_down" or evt == "key_up" then
-      if type(data) == "number" then
+    elseif evt == "key" or evt == "key_up" then
+      -- Only return special keys from key events; letters come via "char".
+      -- Ignore "key_down" — it duplicates the "key" event.
+      -- Also ignore "key_up" for the same key — the "key" event already fired.
+      if evt == "key" and type(data) == "number" then
         local label = KEY_LABEL[data]
         if label then
-          -- Only return special keys from key events; letters come via "char".
           if label == "enter" or label == "up" or label == "down" or label == "escape" then
             return label
           end
-        end
-        -- Unknown numeric key code — ignore.
-      elseif type(data) == "string" and #data == 1 then
-        -- Some builds pass a single-char string where we'd expect a number.
-        local c = string.lower(data)
-        if c:match("^[a-z]$") then
-          return c
         end
       end
     elseif evt == nil then
       return nil
     end
-    -- Any other event type (timer, etc.): ignore and loop.
+    -- Any other event type (timer, key_down, etc.): ignore and loop.
   end
 end
 
@@ -1379,42 +1374,47 @@ local function main()
         elseif evt == "char" or evt == "key" or evt == "key_down" or evt == "key_up" then
           local key
           if evt == "char" then
-            -- Only process letter keys from char events. CC:T emits both a "char"
-            -- and a "key" event for one physical press; by handling letters only
-            -- from "char" and special keys only from "key", each press = one action.
+            -- CC$T fires both a "char" and a "key" event for one physical
+            -- press. We only act on the "char" event for letters to avoid
+            -- double-fire. For Enter we accept char "\r" and ignore the
+            -- key event.
             local c = type(data) == "string" and #data == 1 and string.lower(data) or nil
             if c and c:match("^[a-z]$") then
               key = c
-              -- Mark that we just processed a char event; the next matching
-              -- key/key_down/key_up event for the SAME letter is a duplicate
-              -- from CC:T and must be skipped.
-              skipNextKey = data
-            else
-              key = nil
+              skipNextKey = "char"  -- flag so the duplicate key event is cleared
+            elseif c == "\r" or c == "\n" then
+              key = "enter"
+              skipNextKey = "char"  -- flag so the duplicate key event for enter is cleared
             end
-          elseif evt == "key" or evt == "key_down" or evt == "key_up" then
-            -- If this key event is a duplicate of a recently-processed char event,
-            -- skip it. This prevents the double-fire that causes W/S to skip.
-            if skipNextKey then
-              local label = KEY_LABEL[data] or nil
-              if label == string.lower(skipNextKey) then
-                skipNextKey = nil
-                key = nil
-              end
-            end
-            if not skipNextKey then
-              -- Only process special keys (enter, arrows, escape) from key events.
-              -- Ignore key codes for letter keys — those come through as "char".
-              local label = KEY_LABEL[data] or data
+          elseif evt == "key" or evt == "key_up" then
+            -- "key" events for letters are duplicates of the "char" event
+            -- we already handled — ignore them. Only handle special keys.
+            -- We only accept "key" (not "key_up" or "key_down") to avoid
+            -- double-firing on arrow/enter keys.
+            if evt == "key" and type(data) == "number" then
+              local label = KEY_LABEL[data]
               if label == "enter" or label == "up" or label == "down" or label == "escape" then
-                key = label
-              else
-                key = nil
+                -- If we just processed a char event, this key event is a
+                -- duplicate from CC:T — skip it.
+                if skipNextKey == "char" then
+                  skipNextKey = nil
+                else
+                  key = label
+                  -- Flag so the matching key_up event is skipped
+                  skipNextKey = label
+                end
+              end
+            elseif evt == "key_up" and type(data) == "number" then
+              -- If this key_up matches the key we just processed, skip it
+              if skipNextKey then
+                local label = KEY_LABEL[data]
+                if label == skipNextKey then
+                  skipNextKey = nil
+                end
               end
             end
-          else
-            key = nil
           end
+          -- Ignore "key_down" events entirely — they duplicate the "key" event.
           if not key then
             -- Unrecognised event (e.g. a modifier) — keep waiting.
           else
@@ -1439,6 +1439,9 @@ local function main()
               elseif selectedIndex == 4 then
                 currentScreen = "settings"
               end
+              -- Drain the duplicate key event for Enter that CC:T fires.
+              -- Without this, the sub-screen's readkey() would immediately
+              -- pick up the lingering "key" enter event and return/bounce.
               drainEventQueue()
               break
             elseif isUp then
@@ -1447,7 +1450,7 @@ local function main()
               else
                 selectedIndex = 4
               end
-              -- Re-draw with new selection, then keep waiting.
+              skipNextKey = nil
               drawMainMenu()
               if dashboardTimer then os.cancelTimer(dashboardTimer) end
               dashboardTimer = os.startTimer(3)
@@ -1458,6 +1461,7 @@ local function main()
                 selectedIndex = 1
               end
               drawMainMenu()
+              skipNextKey = nil
               if dashboardTimer then os.cancelTimer(dashboardTimer) end
               dashboardTimer = os.startTimer(3)
             end
