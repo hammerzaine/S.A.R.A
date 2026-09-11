@@ -318,12 +318,13 @@ local function readlnWithEcho(promptText)
 end
 
 -- Drain any leftover events from the queue (CC:T fires both "char" and
--- "key" for one physical Enter/space press; the "key" lingers and gets
--- picked up by the next loop iteration, causing sub-menus to bounce
--- back to main, or W/S to skip an extra item).
+-- "key" for one physical keypress; the duplicate event lingers and gets
+-- picked up by the next loop iteration, causing W/S to skip an extra item
+-- or sub-menus to bounce back to main).
 local function drainEventQueue()
   -- Start a timer that fires in 0.01s, then pull events until that timer
-  -- fires. This is the standard CC:T pattern for non-blocking drain.
+  -- fires. Any char/key/mouse events that arrive before the timer are
+  -- discarded. This is the standard CC:T drain pattern.
   local drainTimer = os.startTimer(0.01)
   while true do
     local evt, data = os.pullEvent()
@@ -1358,6 +1359,7 @@ local function main()
   end
 
   local running = true
+  local skipNextKey = nil  -- tracks the char from a just-processed keypress to skip its duplicate key event
   while running do
     if currentScreen == "main" then
       drawMainMenu()
@@ -1383,20 +1385,32 @@ local function main()
             local c = type(data) == "string" and #data == 1 and string.lower(data) or nil
             if c and c:match("^[a-z]$") then
               key = c
-              -- Drain the matching "key" event that CC:T fires for the same press
-              -- so it doesn't get processed on the next loop iteration.
-              drainEventQueue()
+              -- Mark that we just processed a char event; the next matching
+              -- key/key_down/key_up event for the SAME letter is a duplicate
+              -- from CC:T and must be skipped.
+              skipNextKey = data
             else
               key = nil
             end
           elseif evt == "key" or evt == "key_down" or evt == "key_up" then
-            -- Only process special keys (enter, arrows, escape) from key events.
-            -- Ignore key codes for letter keys — those come through as "char".
-            local label = KEY_LABEL[data] or data
-            if label == "enter" or label == "up" or label == "down" or label == "escape" then
-              key = label
-            else
-              key = nil
+            -- If this key event is a duplicate of a recently-processed char event,
+            -- skip it. This prevents the double-fire that causes W/S to skip.
+            if skipNextKey then
+              local label = KEY_LABEL[data] or nil
+              if label == string.lower(skipNextKey) then
+                skipNextKey = nil
+                key = nil
+              end
+            end
+            if not skipNextKey then
+              -- Only process special keys (enter, arrows, escape) from key events.
+              -- Ignore key codes for letter keys — those come through as "char".
+              local label = KEY_LABEL[data] or data
+              if label == "enter" or label == "up" or label == "down" or label == "escape" then
+                key = label
+              else
+                key = nil
+              end
             end
           else
             key = nil
