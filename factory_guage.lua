@@ -311,11 +311,19 @@ local function readlnWithEcho(promptText)
         end
       else
         -- CC:T may fire only a "key" event for digit keys (no matching "char").
-        -- Convert known digit key codes to characters and accept them as text.
-        local digitChar = KEY_LABEL[key]
-        if digitChar and digitChar:match("^[0-9]$") then
-          t[#t + 1] = digitChar
-          echoChar(digitChar)
+        -- KEY_LABEL maps to names like "one", "two", etc. — convert them to digits.
+        local label = KEY_LABEL[key]
+        if label then
+          -- Convert digit key names to characters (one -> 1, two -> 2, etc.)
+          local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
+          for i, name in ipairs(digitNames) do
+            if label == name then
+              local digit = tostring(i == 10 and 0 or i)
+              t[#t + 1] = digit
+              echoChar(digit)
+              break
+            end
+          end
         end
       end
     end
