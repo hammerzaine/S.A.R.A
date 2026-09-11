@@ -309,6 +309,14 @@ local function readlnWithEcho(promptText)
           table.remove(t)
           echoChar(nil)
         end
+      else
+        -- CC:T may fire only a "key" event for digit keys (no matching "char").
+        -- Convert known digit key codes to characters and accept them as text.
+        local digitChar = KEY_LABEL[key]
+        if digitChar and digitChar:match("^[0-9]$") then
+          t[#t + 1] = digitChar
+          echoChar(digitChar)
+        end
       end
     end
   end
@@ -412,6 +420,9 @@ local factoryGauges = {}
 local dashboardTimer = nil
 local dashboardNeedsRefresh = false
 local currentDashboardItemColor = nil  -- cached color per gauge line for blinking
+
+-- Config file path on the computer's filesystem (CC:T lua filesystem).
+local CONFIG_FILE = "factory_guage_config.lua"
 
 -- ---------------------------------------------------------------------------
 -- FACTORY GAUGE DATA MODEL
@@ -717,6 +728,7 @@ local function addFrogPort()
     name = string.match(name, "^%s*(.-)%s*$")
     if name ~= "" then
       frogPorts[#frogPorts + 1] = name
+      saveConfig()
       termWriteLn("")
       termWriteLn("Added: " .. name)
     else
@@ -770,6 +782,7 @@ local function removeFrogPort()
     local num = tonumber(input)
     if num and num >= 1 and num <= #frogPorts then
       local removed = table.remove(frogPorts, num)
+      saveConfig()
       termWriteLn("")
       termWriteLn("Removed: " .. removed)
     else
@@ -1059,6 +1072,7 @@ local function showCreateFactoryGauge()
     inactive = false,
   }
   factoryGauges[#factoryGauges + 1] = gauge
+  saveConfig()
 
   -- Confirm
   y = y + 1
@@ -1264,6 +1278,7 @@ local function showGaugeEditor(g)
       local nq = tonumber(qtyChoice)
       if nq and nq >= 1 and nq <= 100 then
         g.qty = nq
+        saveConfig()
       else
         termSetTextColor(colors.gray)
         termWriteLn("(invalid — unchanged)")
@@ -1271,13 +1286,16 @@ local function showGaugeEditor(g)
       end
     elseif key == "2" then
       g.mode = (g.mode == "stack" and "item" or "stack")
+      saveConfig()
     elseif key == "3" then
       g.inactive = not g.inactive
+      saveConfig()
     elseif key == "4" then
       -- Delete
       for i, og in ipairs(factoryGauges) do
         if og == g then
           table.remove(factoryGauges, i)
+          saveConfig()
           break
         end
       end
@@ -1305,8 +1323,81 @@ local function countTable(t)
   return c
 end
 
+-- Serialise a value to a Lua-loadable string (tables, strings, numbers, booleans).
+local function serializeValue(val)
+  if type(val) == "string" then
+    return string.format("%q", val)
+  elseif type(val) == "number" or type(val) == "boolean" then
+    return tostring(val)
+  elseif type(val) == "table" then
+    local parts = {}
+    for k, v in pairs(val) do
+      if type(k) == "string" then
+        parts[#parts + 1] = "[" .. string.format("%q", k) .. "] = " .. serializeValue(v)
+      elseif type(k) == "number" then
+        parts[#parts + 1] = "[" .. k .. "] = " .. serializeValue(v)
+      end
+    end
+    return "{ " .. table.concat(parts, ", ") .. " }"
+  else
+    return "nil"
+  end
+end
+
+-- Save frogPorts and factoryGauges to the config file.
+local function saveConfig()
+  if not has_io then return false end
+  local f, err = io.open(CONFIG_FILE, "w")
+  if not f then
+    pcall(function() _G.term.write("\n[error: cannot write " .. CONFIG_FILE .. ": " .. tostring(err) .. "]\n") end)
+    return false
+  end
+  f:write("-- factory_guage config (auto-generated)\n")
+  f:write("frogPorts = " .. serializeValue(frogPorts) .. "\n")
+  f:write("factoryGauges = " .. serializeValue(factoryGauges) .. "\n")
+  f:close()
+  return true
+end
+
+-- Load frogPorts and factoryGauges from the config file if it exists.
+local function loadConfig()
+  if not has_io then return false end
+  local f, err = io.open(CONFIG_FILE, "r")
+  if not f then
+    -- No config file yet — that's fine.
+    return false
+  end
+  local content = f:read("*all")
+  f:close()
+  if not content then return false end
+  -- Execute the config in a sandbox: load frogPorts and factoryGauges into locals.
+  local env = {}
+  local fn, compileErr = load(content, CONFIG_FILE, "t", env)
+  if not fn then
+    pcall(function() _G.term.write("\n[error: cannot parse " .. CONFIG_FILE .. ": " .. tostring(compileErr) .. "]\n") end)
+    return false
+  end
+  local ok, runErr = pcall(fn)
+  if not ok then
+    pcall(function() _G.term.write("\n[error: cannot run " .. CONFIG_FILE .. ": " .. tostring(runErr) .. "]\n") end)
+    return false
+  end
+  if type(env.frogPorts) == "table" then
+    frogPorts = env.frogPorts
+  end
+  if type(env.factoryGauges) == "table" then
+    factoryGauges = env.factoryGauges
+  end
+  return true
+end
+
 local function main()
   local _diag = function() end
+
+  -- Load saved state from config file (frogPorts and factoryGauges).
+  -- If a config file exists, its values are used; otherwise sign text or
+  -- defaults are used below.
+  loadConfig()
 
   -- Load frog ports from sign text if available, else defaults
   local clipboardNames = {}
@@ -1326,10 +1417,14 @@ local function main()
     end
   end
 
-  if #clipboardNames > 0 then
-    frogPorts = clipboardNames
-  else
-    frogPorts = { "smasher", "grinder", "smelter" }
+  -- Load frog ports from sign text if available AND no config file was loaded.
+  -- If a config file provided frogPorts, keep those.
+  if #frogPorts == 0 then
+    if #clipboardNames > 0 then
+      frogPorts = clipboardNames
+    else
+      frogPorts = { "smasher", "grinder", "smelter" }
+    end
   end
 
   selectedIndex = 1
