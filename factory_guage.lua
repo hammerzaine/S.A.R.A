@@ -290,7 +290,8 @@ local function readlnWithEcho(promptText)
         -- ignore multi-char / non-string char events
       elseif c == "\n" or c == "\r" or c == "\b" or c == "\127" then
         -- Ignore control chars from char events; they come via "key" below.
-      else
+      elseif c:match("^[a-z0-9]$") then
+        -- Accept letters and digits as input text.
         t[#t + 1] = c
         echoChar(c)
       end
