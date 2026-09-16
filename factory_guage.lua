@@ -297,45 +297,62 @@ local function readlnWithEcho(promptText)
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
-      -- Only handle actual typed characters here. CC:T also fires a matching
-      -- "key" event for Enter/Backspace; those are handled below so we don't
-      -- double-process one physical keypress.
+      -- Handle typed characters. Accept any single printable char.
       local c = data
-      if type(c) ~= "string" or #c ~= 1 then
-        -- ignore multi-char / non-string char events
-      elseif c == "\n" or c == "\r" or c == "\b" or c == "\127" then
-        -- Ignore control chars from char events; they come via "key" below.
-      elseif c:match("^[a-z0-9]$") then
-        -- Accept letters and digits as input text.
-        t[#t + 1] = c
-        echoChar(c)
-        skipNextKey = c  -- flag so the duplicate key event for this char is skipped
-      end
-    elseif evt == "key" or evt == "key_down" then
-      local key = data
-      -- If this key event is a duplicate of a recently-processed char event,
-      -- skip it to avoid double-input.
-      if skipNextKey then
-        skipNextKey = nil
-      -- CC$T fires both "char" and "key" for letter/digit keys — we only
-      -- accept letters/digits from "char" to avoid double-input.
-      -- Only accept Enter/Backspace from "key" events.
-      elseif key == keys.enter then
-        if evt == "key" then
+      if type(c) == "string" and #c == 1 then
+        if c == "\n" or c == "\r" then
+          -- Enter via char event: finalize input.
           dispWriteLn("")
           if has_term and has_term_write then
             pcall(function() _G.term.write("\n") end)
             termFlush()
           end
           break
-        end
-      elseif key == keys.backspace then
-        if evt == "key" and #t > 0 then
-          table.remove(t)
-          echoChar(nil)
+        elseif c == "\b" or c == "\127" then
+          -- Backspace: remove last char.
+          if #t > 0 then
+            table.remove(t)
+            echoChar(nil)
+          end
+          skipNextKey = true
+        else
+          -- Any other printable character (letters, digits, symbols).
+          t[#t + 1] = c
+          echoChar(c)
+          skipNextKey = true  -- flag so the duplicate key event is skipped
         end
       end
-    end  -- while true
+    elseif evt == "key" or evt == "key_down" then
+      local key = data
+      -- If this key event is a duplicate of a recently-processed char event,
+      -- skip it to avoid double-input.
+      local skip = false
+      if skipNextKey then
+        skipNextKey = nil
+        skip = true
+      end
+      -- Only handle Enter and Backspace from key events.
+      -- Digits/letters come via "char" events.
+      if not skip then
+        if key == keys.enter then
+          if evt == "key" then
+            dispWriteLn("")
+            if has_term and has_term_write then
+              pcall(function() _G.term.write("\n") end)
+              termFlush()
+            end
+            break
+          end
+        elseif key == keys.backspace then
+          if evt == "key" and #t > 0 then
+            table.remove(t)
+            echoChar(nil)
+          end
+        end
+      end
+    elseif evt == nil then
+      return nil
+    end
   end
   local line = table.concat(t)
   if line == "" then return nil end
