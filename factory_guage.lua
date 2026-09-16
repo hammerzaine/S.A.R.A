@@ -348,6 +348,21 @@ local function readlnWithEcho(promptText)
             table.remove(t)
             echoChar(nil)
           end
+        else
+          -- Fallback: if CC:T doesn't fire a "char" event for digit keys,
+          -- handle them here via KEY_LABEL. Maps keys.one -> "1", etc.
+          local label = KEY_LABEL and KEY_LABEL[key]
+          if label then
+            local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
+            for i, name in ipairs(digitNames) do
+              if label == name then
+                local digit = tostring(i == 10 and 0 or i)
+                t[#t + 1] = digit
+                echoChar(digit)
+                break
+              end
+            end
+          end
         end
       end
     elseif evt == nil then
