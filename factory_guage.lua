@@ -331,13 +331,19 @@ local function readlnWithEcho(promptText)
         -- like "one", "two", etc. — convert them to digit characters.
         local label = KEY_LABEL[key]
         if label then
-          local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
-          for i, name in ipairs(digitNames) do
-            if label == name then
-              local digit = tostring(i == 10 and 0 or i)
-              t[#t + 1] = digit
-              echoChar(digit)
-              break
+          -- Handle both name-based ("one", "two") and numeric ("1", "2") labels.
+          if label:match("^[0-9]$") then
+            t[#t + 1] = label
+            echoChar(label)
+          else
+            local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
+            for i, name in ipairs(digitNames) do
+              if label == name then
+                local digit = tostring(i == 10 and 0 or i)
+                t[#t + 1] = digit
+                echoChar(digit)
+                break
+              end
             end
           end
         end
