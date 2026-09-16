@@ -1435,13 +1435,13 @@ local function main()
   end
 
   -- Load frog ports from sign text if available AND no config file was loaded.
-  -- If a config file provided frogPorts, keep those.
+  -- If a config file provided frogPorts, keep those. If nothing was loaded,
+  -- start with an empty list — users add ports manually via the menu.
   if #frogPorts == 0 then
     if #clipboardNames > 0 then
       frogPorts = clipboardNames
-    else
-      frogPorts = { "smasher", "grinder", "smelter" }
     end
+    -- No defaults: leave frogPorts empty if no config or signs found.
   end
 
   selectedIndex = 1
