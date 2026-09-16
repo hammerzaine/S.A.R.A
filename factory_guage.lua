@@ -392,18 +392,22 @@ local function drainEventQueue()
 end
 
 local function readkey()
+  local charPending = {}  -- tracks chars already handled via key events
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
-      -- Only process letter keys from char events. CC:T emits both a "char"
-      -- and a "key" event for one physical press; by handling letters only
-      -- from "char" and special keys only from "key", each press = one action.
+      -- Accept letter keys and digit keys from char events.
+      -- CC:T emits both "char" and "key" for one physical press.
       if type(data) == "string" and #data == 1 then
         local c = string.lower(data)
-        if c:match("^[a-z]$") then
-          return c
+        if c:match("^[a-z0-9]$") then
+          -- Skip if this char was already handled via a key event.
+          if not charPending[c] then
+            charPending[c] = nil
+            return c
+          end
+          charPending[c] = nil
         end
-      end
     elseif evt == "key" or evt == "key_up" then
       -- Only return special keys from key events; letters come via "char".
       -- Ignore "key_down" — it duplicates the "key" event.
@@ -412,6 +416,10 @@ local function readkey()
         local label = KEY_LABEL[data]
         if label then
           if label == "enter" or label == "up" or label == "down" or label == "escape" then
+            return label
+          elseif label:match("^[0-9]$") then
+            -- Digit key: set flag so the matching char event is skipped
+            charPending[label] = true
             return label
           end
         end
