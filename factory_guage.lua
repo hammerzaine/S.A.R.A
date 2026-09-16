@@ -258,6 +258,7 @@ local function readlnWithEcho(promptText)
 
   local t = {}
   local echoX, echoY = 1, 1
+  local skipNextKey = nil  -- skip the key event that follows a processed char event
   if onMonitor and monitor and hasFn(monitor, "getCursorPos") then
     echoX, echoY = monitor.getCursorPos()
   elseif has_term and has_term_getCursorPos then
@@ -308,11 +309,19 @@ local function readlnWithEcho(promptText)
         -- Accept letters and digits as input text.
         t[#t + 1] = c
         echoChar(c)
+        skipNextKey = c  -- flag so the duplicate key event for this char is skipped
       end
     elseif evt == "key" or evt == "key_down" then
       local key = data
-      if key == keys.enter then
-        if evt == "key" then  -- only process key (not key_down) to avoid double-fire
+      -- If this key event is a duplicate of a recently-processed char event,
+      -- skip it to avoid double-input.
+      if skipNextKey then
+        skipNextKey = nil
+      -- CC$T fires both "char" and "key" for letter/digit keys — we only
+      -- accept letters/digits from "char" to avoid double-input.
+      -- Only accept Enter/Backspace from "key" events.
+      elseif key == keys.enter then
+        if evt == "key" then
           dispWriteLn("")
           if has_term and has_term_write then
             pcall(function() _G.term.write("\n") end)
@@ -321,36 +330,13 @@ local function readlnWithEcho(promptText)
           break
         end
       elseif key == keys.backspace then
-        if evt == "key" and #t > 0 then  -- only process key (not key_down) to avoid double-fire
+        if evt == "key" and #t > 0 then
           table.remove(t)
           echoChar(nil)
         end
-      else
-        -- CC:T digit keys may fire only a "key" or "key_down" event
-        -- (no matching "char" event). KEY_LABEL maps key codes to names
-        -- like "one", "two", etc. — convert them to digit characters.
-        local label = KEY_LABEL[key]
-        if label then
-          -- Handle both name-based ("one", "two") and numeric ("1", "2") labels.
-          if label:match("^[0-9]$") then
-            t[#t + 1] = label
-            echoChar(label)
-          else
-            local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
-            for i, name in ipairs(digitNames) do
-              if label == name then
-                local digit = tostring(i == 10 and 0 or i)
-                t[#t + 1] = digit
-                echoChar(digit)
-                break
-              end
-            end
-          end
-        end
       end
-    end
+    end  -- while true
   end
-
   local line = table.concat(t)
   if line == "" then return nil end
   return line
