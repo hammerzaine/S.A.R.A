@@ -258,7 +258,7 @@ local function readlnWithEcho(promptText)
 
   local t = {}
   local echoX, echoY = 1, 1
-  local skipNextKey = nil  -- skip the key event that follows a processed char event
+  local charPending = {}  -- tracks chars already processed via key event (key event comes first)
   if onMonitor and monitor and hasFn(monitor, "getCursorPos") then
     echoX, echoY = monitor.getCursorPos()
   elseif has_term and has_term_getCursorPos then
@@ -297,11 +297,15 @@ local function readlnWithEcho(promptText)
   while true do
     local evt, data = os.pullEvent()
     if evt == "char" then
-      -- Handle typed characters. Accept any single printable char.
+      -- Accept any single printable character from char events.
       local c = data
       if type(c) == "string" and #c == 1 then
-        if c == "\n" or c == "\r" then
-          -- Enter via char event: finalize input.
+        -- Skip if this char was already handled via a key event
+        -- (CC:T fires key event first, then char — both for same key).
+        if charPending[c] then
+          charPending[c] = nil
+        elseif c == "\n" or c == "\r" then
+          -- Enter: finalize input.
           dispWriteLn("")
           if has_term and has_term_write then
             pcall(function() _G.term.write("\n") end)
@@ -314,67 +318,48 @@ local function readlnWithEcho(promptText)
             table.remove(t)
             echoChar(nil)
           end
-          skipNextKey = true
-        elseif c:match("^[a-z0-9]$") then
-          -- Accept letters and digits as input text.
+        else
+          -- Any other printable character (letters, digits, symbols).
           t[#t + 1] = c
           echoChar(c)
-          skipNextKey = c  -- flag so the duplicate key event is skipped
-        else
-          -- Debug: show any other char event we received
-          if has_term and has_term_write then
-            pcall(function() _G.term.write("[char:" .. tostring(c) .. "]") end)
-          end
         end
       end
     elseif evt == "key" or evt == "key_down" then
+      -- Fallback: if CC:T doesn't fire a "char" event for digit keys,
+      -- try to resolve them from KEY_LABEL. Also handle Enter/Backspace
+      -- here if they didn't come through as char events.
       local key = data
-      -- If this key event is a duplicate of a recently-processed char event,
-      -- skip it to avoid double-input.
-      local skip = false
-      if skipNextKey then
-        skipNextKey = nil
-        skip = true
-      end
-      -- Only handle Enter and Backspace from key events.
-      -- Digits/letters come via "char" events.
-      if not skip then
-        if key == keys.enter then
-          if evt == "key" then
-            dispWriteLn("")
-            if has_term and has_term_write then
-              pcall(function() _G.term.write("\n") end)
-              termFlush()
-            end
-            break
+      if key == keys.enter then
+        if evt == "key" then
+          dispWriteLn("")
+          if has_term and has_term_write then
+            pcall(function() _G.term.write("\n") end)
+            termFlush()
           end
-        elseif key == keys.backspace then
-          if evt == "key" and #t > 0 then
-            table.remove(t)
-            echoChar(nil)
-          end
-        else
-          -- Fallback: if CC:T doesn't fire a "char" event for digit keys.
-          local label = KEY_LABEL and KEY_LABEL[key]
-          if label then
-            if label:match("^[0-9]$") then
-              t[#t + 1] = label
-              echoChar(label)
-            else
-              local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
-              for i, name in ipairs(digitNames) do
-                if label == name then
-                  local digit = tostring(i == 10 and 0 or i)
-                  t[#t + 1] = digit
-                  echoChar(digit)
-                  break
-                end
-              end
-            end
+          break
+        end
+      elseif key == keys.backspace then
+        if evt == "key" and #t > 0 then
+          table.remove(t)
+          echoChar(nil)
+        end
+      else
+        local label = KEY_LABEL and KEY_LABEL[key]
+        if label then
+          if label:match("^[0-9]$") then
+            t[#t + 1] = label
+            echoChar(label)
+            charPending[label] = true
           else
-            -- Debug: show key events we don't recognize
-            if has_term and has_term_write then
-              pcall(function() _G.term.write("[key:" .. tostring(key) .. "]") end)
+            local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
+            for i, name in ipairs(digitNames) do
+              if label == name then
+                local digit = tostring(i == 10 and 0 or i)
+                t[#t + 1] = digit
+                echoChar(digit)
+                charPending[digit] = true
+                break
+              end
             end
           end
         end
