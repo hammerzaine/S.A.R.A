@@ -225,6 +225,20 @@ end
 -- INPUT — with screen echo
 -- ---------------------------------------------------------------------------
 
+-- Build KEY_LABEL before any input function references it.
+local KEY_LABEL = {}
+
+do
+  local keysTbl = _G.keys
+  if type(keysTbl) == "table" then
+    for k, v in pairs(keysTbl) do
+      if type(k) == "string" and type(v) == "number" then
+        KEY_LABEL[v] = string.lower(k)
+      end
+    end
+  end
+end
+
 -- Read a line of text from the keyboard, echoing characters to the display
 -- as they are typed (like a normal terminal prompt). Backspace removes the
 -- last character and erases it from screen. Enter finishes the line.
@@ -351,37 +365,6 @@ local function drainEventQueue()
       break
     end
     -- Discard any other event: char, key, mouse, etc.
-  end
-end
-
--- ---------------------------------------------------------------------------
--- readkey() — normalises every event to a lowercase string label
--- ---------------------------------------------------------------------------
---
--- CC:T fires keys two ways:
---   1. "char" events with a single-character string (e.g. "w", "a", "r").
---   2. "key" / "key_down" / "key_up" events with a numeric key code from the
---      keys table (e.g. keys.enter, keys.up, keys.escape).
---
--- We build a reverse map (number → lowercase label) from the keys table that
--- actually exists on this build, so every handler only ever sees a string
--- label. Letter keys that aren't in the keys table are handled by the "char"
--- path directly.
---
--- Returns:
---   - a lowercase string label (e.g. "w", "a", "up", "enter", "escape")
---   - nil  (os.pullEvent returned nil — no more events; caller should stop)
-
-local KEY_LABEL = {}
-
-do
-  local keysTbl = _G.keys
-  if type(keysTbl) == "table" then
-    for k, v in pairs(keysTbl) do
-      if type(k) == "string" and type(v) == "number" then
-        KEY_LABEL[v] = string.lower(k)
-      end
-    end
   end
 end
 
