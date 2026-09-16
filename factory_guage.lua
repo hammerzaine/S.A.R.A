@@ -315,11 +315,16 @@ local function readlnWithEcho(promptText)
             echoChar(nil)
           end
           skipNextKey = true
-        else
-          -- Any other printable character (letters, digits, symbols).
+        elseif c:match("^[a-z0-9]$") then
+          -- Accept letters and digits as input text.
           t[#t + 1] = c
           echoChar(c)
-          skipNextKey = true  -- flag so the duplicate key event is skipped
+          skipNextKey = c  -- flag so the duplicate key event is skipped
+        else
+          -- Debug: show any other char event we received
+          if has_term and has_term_write then
+            pcall(function() _G.term.write("[char:" .. tostring(c) .. "]") end)
+          end
         end
       end
     elseif evt == "key" or evt == "key_down" then
@@ -349,18 +354,27 @@ local function readlnWithEcho(promptText)
             echoChar(nil)
           end
         else
-          -- Fallback: if CC:T doesn't fire a "char" event for digit keys,
-          -- handle them here via KEY_LABEL. Maps keys.one -> "1", etc.
+          -- Fallback: if CC:T doesn't fire a "char" event for digit keys.
           local label = KEY_LABEL and KEY_LABEL[key]
           if label then
-            local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
-            for i, name in ipairs(digitNames) do
-              if label == name then
-                local digit = tostring(i == 10 and 0 or i)
-                t[#t + 1] = digit
-                echoChar(digit)
-                break
+            if label:match("^[0-9]$") then
+              t[#t + 1] = label
+              echoChar(label)
+            else
+              local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
+              for i, name in ipairs(digitNames) do
+                if label == name then
+                  local digit = tostring(i == 10 and 0 or i)
+                  t[#t + 1] = digit
+                  echoChar(digit)
+                  break
+                end
               end
+            end
+          else
+            -- Debug: show key events we don't recognize
+            if has_term and has_term_write then
+              pcall(function() _G.term.write("[key:" .. tostring(key) .. "]") end)
             end
           end
         end
@@ -816,17 +830,30 @@ local function removeFrogPort()
 end
 
 local function showFrogPortList()
-  if #frogPorts == 0 then
-    termClear()
-    drawHeader("FROG PORTS")
-    termSetTextColor(colors.gray)
-    termSetCursorPos(1, 3)
-    termWriteLn("No Frog Ports configured.")
-    termWriteLn("")
-    termWriteLn("(press any key to continue...)")
-    readkey()
-    return
-  end
+  while true do
+    if #frogPorts == 0 then
+      termClear()
+      drawHeader("FROG PORTS")
+      termSetTextColor(colors.gray)
+      termSetCursorPos(1, 3)
+      termWriteLn("No Frog Ports configured.")
+      termWriteLn("")
+      termSetCursorPos(1, 5)
+      termWrite("A. Add Frog Port")
+      termSetCursorPos(1, 6)
+      termWrite("B. Back")
+      termSetCursorPos(1, 8)
+      termSetTextColor(colors.darkGray)
+      termWriteLn("(press a key...)")
+      local key = readkey()
+      if not key then break end
+      if key == "a" or key == "enter" then
+        addFrogPort()
+        selectedIndex = 1
+      else
+        break
+      end
+    else
 
   local listNeedsRedraw = true
 
@@ -921,6 +948,8 @@ local function showFrogPortList()
     end
     -- Any other key is ignored and we loop again.
   end
+  end
+end
 end
 
 -- ---------------------------------------------------------------------------
