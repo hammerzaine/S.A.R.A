@@ -295,26 +295,28 @@ local function readlnWithEcho(promptText)
         t[#t + 1] = c
         echoChar(c)
       end
-    elseif evt == "key" then
+    elseif evt == "key" or evt == "key_down" then
       local key = data
       if key == keys.enter then
-        dispWriteLn("")
-        if has_term and has_term_write then
-          pcall(function() _G.term.write("\n") end)
-          termFlush()
+        if evt == "key" then  -- only process key (not key_down) to avoid double-fire
+          dispWriteLn("")
+          if has_term and has_term_write then
+            pcall(function() _G.term.write("\n") end)
+            termFlush()
+          end
+          break
         end
-        break
       elseif key == keys.backspace then
-        if #t > 0 then
+        if evt == "key" and #t > 0 then  -- only process key (not key_down) to avoid double-fire
           table.remove(t)
           echoChar(nil)
         end
       else
-        -- CC:T may fire only a "key" event for digit keys (no matching "char").
-        -- KEY_LABEL maps to names like "one", "two", etc. — convert them to digits.
+        -- CC:T digit keys may fire only a "key" or "key_down" event
+        -- (no matching "char" event). KEY_LABEL maps key codes to names
+        -- like "one", "two", etc. — convert them to digit characters.
         local label = KEY_LABEL[key]
         if label then
-          -- Convert digit key names to characters (one -> 1, two -> 2, etc.)
           local digitNames = {"one","two","three","four","five","six","seven","eight","nine","zero"}
           for i, name in ipairs(digitNames) do
             if label == name then
