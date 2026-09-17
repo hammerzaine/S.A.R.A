@@ -1608,6 +1608,7 @@ local function main()
         end
         -- Any other event type (mouse, etc.): ignore.
       end
+    end
 
     elseif currentScreen == "create" then
       showCreateFactoryGauge()
