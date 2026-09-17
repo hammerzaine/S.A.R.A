@@ -37,21 +37,25 @@ local monitor = nil
 local onMonitor = false
 
 if has_peripheral_find then
-  local ok, result = pcall(function() return _G.peripheral.find("monitor") end)
-  if ok then
-    monitor = result
-    if monitor then
-      onMonitor = true
-      _diag("[diag] monitor: DETECTED")
-    else
-      _diag("[diag] monitor: NOT FOUND - using terminal")
+  -- Use peripheral.wrap on each side instead of peripheral.find to avoid
+  -- blocking on network peripherals. Check all 6 sides for a monitor.
+  local sides = {"top", "bottom", "left", "right", "front", "back"}
+  for _, side in ipairs(sides) do
+    local ok, periph = pcall(function() return _G.peripheral.wrap(side) end)
+    if ok and periph then
+      -- Check if this peripheral is a monitor by looking for monitor methods
+        if type(periph.write) == "function" and type(periph.clear) == "function" and type(periph.setCursorPos) == "function" then
+          monitor = periph
+          onMonitor = true
+          _diag("[diag] monitor: DETECTED on " .. side)
+          break
+        end
+      end
     end
-  else
-    _diag("[diag] monitor: find failed - " .. tostring(result))
   end
-else
-  _diag("[diag] monitor: peripheral.find unavailable")
-end
+  if not monitor then
+    _diag("[diag] monitor: NOT FOUND - using terminal")
+  end
 
 local display = monitor or (_G.term or nil)
 
