@@ -21,7 +21,6 @@ local has_term_setTextScale = has_term and hasFn(_G.term, "setTextScale")
 local has_colors        = _G.colors and type(_G.colors) == "table" and
                             type(_G.colors.green) ~= "nil"
 local has_io            = _G.io and type(_G.io.read) == "function"
-local has_peripheral_find = _G.peripheral and type(_G.peripheral.find) == "function"
 -- Suppress all diagnostic output at file scope: _diag is a no-op until main()
 -- reassigns it; defined here so the file-scope calls at lines 24-45 never throw.
 local _diag = function() end
@@ -38,18 +37,23 @@ local monitor = nil
 local onMonitor = false
 
 if has_peripheral_find then
-  monitor = _G.peripheral.find("monitor")
-  if monitor then
-    onMonitor = true
-    _diag("[diag] monitor: DETECTED")
+  local ok, result = pcall(function() return _G.peripheral.find("monitor") end)
+  if ok then
+    monitor = result
+    if monitor then
+      onMonitor = true
+      _diag("[diag] monitor: DETECTED")
+    else
+      _diag("[diag] monitor: NOT FOUND - using terminal")
+    end
   else
-    _diag("[diag] monitor: NOT FOUND - using terminal")
+    _diag("[diag] monitor: find failed - " .. tostring(result))
   end
 else
   _diag("[diag] monitor: peripheral.find unavailable")
 end
 
-local display = monitor or term
+local display = monitor or (_G.term or nil)
 
 -- ---------------------------------------------------------------------------
 -- OUTPUT HELPERS
