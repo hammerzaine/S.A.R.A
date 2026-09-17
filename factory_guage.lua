@@ -398,16 +398,15 @@ local function readkey()
     if evt == "char" then
       -- Accept letter keys and digit keys from char events.
       -- CC:T emits both "char" and "key" for one physical press.
-      if type(data) == "string" and #data == 1 then
-        local c = string.lower(data)
-        if c:match("^[a-z0-9]$") then
-          -- Skip if this char was already handled via a key event.
-          if not charPending[c] then
-            charPending[c] = nil
-            return c
-          end
+      local c = type(data) == "string" and #data == 1 and string.lower(data) or nil
+      if c and c:match("^[a-z0-9]$") then
+        -- Skip if this char was already handled via a key event.
+        if not charPending[c] then
           charPending[c] = nil
+          return c
         end
+        charPending[c] = nil
+      end
     elseif evt == "key" or evt == "key_up" then
       -- Only return special keys from key events; letters come via "char".
       -- Ignore "key_down" - it duplicates the "key" event.
@@ -1447,9 +1446,9 @@ local function main()
       if comp and hasFn(comp, "getSignText") then
         local text = comp.getSignText()
         if text then
-          for line in string.gmatch(text, "[^\r\n]+") do
-            line = string.match(line, "^%s*(.-)%s*$")
-            if line ~= "" then clipboardNames[#clipboardNames + 1] = line end
+          for rawLine in string.gmatch(text, "[^\r\n]+") do
+            local trimmed = string.match(rawLine, "^%s*(.-)%s*$")
+            if trimmed ~= "" then clipboardNames[#clipboardNames + 1] = trimmed end
           end
         end
       end
