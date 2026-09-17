@@ -60,25 +60,30 @@ local function termFlush()
 end
 
 local function dispWrite(text)
-    display.write(text)
+    if display and hasFn(display, "write") then
+      pcall(function() display.write(text) end)
+    end
 end
 
 local function dispWriteLn(text)
-    dispWrite(text)
-    local _, y = display.getCursorPos()
-    local _, h = display.getSize()
-    if y >= h then
-        if onMonitor then
-            display.setCursorPos(1, h)
-            display.write(string.rep(" ", 51))
-            display.setCursorPos(1, h)
-        else
-            display.scroll(1)
-            display.setCursorPos(1, h)
-        end
+  dispWrite(text)
+  if not display then return end
+  local y = 1
+  pcall(function() y = select(2, display.getCursorPos()) end)
+  local h = 1
+  pcall(function() h = select(2, display.getSize()) end)
+  if y >= h then
+    if onMonitor then
+      pcall(function() display.setCursorPos(1, h) end)
+      pcall(function() display.write(string.rep(" ", 51)) end)
+      pcall(function() display.setCursorPos(1, h) end)
     else
-        display.setCursorPos(1, y + 1)
+      pcall(function() display.scroll(1) end)
+      pcall(function() display.setCursorPos(1, h) end)
     end
+  else
+    pcall(function() display.setCursorPos(1, y + 1) end)
+  end
 end
 
 local function prompt(text)
@@ -816,12 +821,12 @@ end
 -- ---------------------------------------------------------------------------
 
 local function addFrogPort()
-  termClear()
+  dispClear()
   drawHeader("ADD FROG PORT")
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, 3)
-  termWriteLn("Enter the name of the new Frog Port:")
-  termWriteLn("")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, 3)
+  dispWriteLn("Enter the name of the new Frog Port:")
+  dispWriteLn("")
 
   local name = readlnWithEcho("> ")
   if name and name ~= "" then
@@ -829,53 +834,53 @@ local function addFrogPort()
     if name ~= "" then
       frogPorts[#frogPorts + 1] = name
       saveConfig()
-      termWriteLn("")
-      termWriteLn("Added: " .. name)
+      dispWriteLn("")
+      dispWriteLn("Added: " .. name)
     else
-      termWriteLn("")
-      termWriteLn("(empty name - not added)")
+      dispWriteLn("")
+      dispWriteLn("(empty name - not added)")
     end
   else
-    termWriteLn("")
-    termWriteLn("(cancelled)")
+    dispWriteLn("")
+    dispWriteLn("(cancelled)")
   end
-  termWriteLn("")
-  termWriteLn("(press any key to continue...)")
+  dispWriteLn("")
+  dispWriteLn("(press any key to continue...)")
   readkey()
 end
 
 local function removeFrogPort()
   if #frogPorts == 0 then
-    termClear()
+    dispClear()
     drawHeader("REMOVE FROG PORT")
-    termSetTextColor(colors.gray)
-    termSetCursorPos(1, 3)
-    termWriteLn("No Frog Ports to remove.")
-    termWriteLn("")
-    termWriteLn("(press any key to continue...)")
+    dispSetTextColor(colors.gray)
+    dispSetCursorPos(1, 3)
+    dispWriteLn("No Frog Ports to remove.")
+    dispWriteLn("")
+    dispWriteLn("(press any key to continue...)")
     readkey()
     return
   end
 
   -- Show the numbered list
-  termClear()
+  dispClear()
   drawHeader("REMOVE FROG PORT")
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, 3)
-  termWriteLn("Select a Frog Port to remove:")
-  termWriteLn("")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, 3)
+  dispWriteLn("Select a Frog Port to remove:")
+  dispWriteLn("")
 
   for i, name in ipairs(frogPorts) do
-    termSetCursorPos(2, 4 + i - 1)
-    termSetTextColor(colors.gray)
-    termWrite(i .. ". " .. name)
+    dispSetCursorPos(2, 4 + i - 1)
+    dispSetTextColor(colors.gray)
+    dispWrite(i .. ". " .. name)
   end
 
   local bottomY = 4 + #frogPorts + 1
-  termSetCursorPos(1, bottomY)
-  termSetTextColor(colors.darkGray)
-  termWriteLn("")
-  termWriteLn("(type the number of the port to remove)")
+  dispSetCursorPos(1, bottomY)
+  dispSetTextColor(colors.darkGray)
+  dispWriteLn("")
+  dispWriteLn("(type the number of the port to remove)")
 
   local input = readlnWithEcho("> ")
   if input then
@@ -883,37 +888,38 @@ local function removeFrogPort()
     if num and num >= 1 and num <= #frogPorts then
       local removed = table.remove(frogPorts, num)
       saveConfig()
-      termWriteLn("")
-      termWriteLn("Removed: " .. removed)
+      dispWriteLn("")
+      dispSetTextColor(colors.white)
+      dispWriteLn("Removed: " .. removed)
     else
-      termWriteLn("")
-      termWriteLn("Invalid number - enter a number from 1 to " .. #frogPorts)
+      dispWriteLn("")
+      dispWriteLn("Invalid number - enter a number from 1 to " .. #frogPorts)
     end
   else
-    termWriteLn("")
-    termWriteLn("(cancelled)")
+    dispWriteLn("")
+    dispWriteLn("(cancelled)")
   end
-  termWriteLn("")
-  termWriteLn("(press any key to continue...)")
+  dispWriteLn("")
+  dispWriteLn("(press any key to continue...)")
   readkey()
 end
 
 local function showFrogPortList()
   while true do
     if #frogPorts == 0 then
-      termClear()
+      dispClear()
       drawHeader("FROG PORTS")
-      termSetTextColor(colors.gray)
-      termSetCursorPos(1, 3)
-      termWriteLn("No Frog Ports configured.")
-      termWriteLn("")
-      termSetCursorPos(1, 5)
-      termWrite("A. Add Frog Port")
-      termSetCursorPos(1, 6)
-      termWrite("B. Back")
-      termSetCursorPos(1, 8)
-      termSetTextColor(colors.darkGray)
-      termWriteLn("(press a key...)")
+      dispSetTextColor(colors.gray)
+      dispSetCursorPos(1, 3)
+      dispWriteLn("No Frog Ports configured.")
+      dispWriteLn("")
+      dispSetCursorPos(1, 5)
+      dispWrite("A. Add Frog Port")
+      dispSetCursorPos(1, 6)
+      dispWrite("B. Back")
+      dispSetCursorPos(1, 8)
+      dispSetTextColor(colors.darkGray)
+      dispWriteLn("(press a key...)")
       local key = readkey()
       if not key then break end
       if key == "a" or key == "enter" then
@@ -929,39 +935,39 @@ local function showFrogPortList()
 
   while true do
     if listNeedsRedraw then
-      termClear()
+      dispClear()
       drawHeader("FROG PORTS")
 
       local listY = 3
       for i, name in ipairs(frogPorts) do
         local isSelected = (i == selectedIndex)
         if isSelected then
-          termSetTextColor(colors.white)
-          termSetBackgroundColor(colors.blue)
+          dispSetTextColor(colors.white)
+          dispSetBackgroundColor(colors.blue)
         else
-          termSetTextColor(colors.gray)
-          termSetBackgroundColor(colors.black)
+          dispSetTextColor(colors.gray)
+          dispSetBackgroundColor(colors.black)
         end
-        termSetCursorPos(2, listY)
+        dispSetCursorPos(2, listY)
         if isSelected then
-          termWrite("> " .. i .. ". " .. name .. " ")
+          dispWrite("> " .. i .. ". " .. name .. " ")
         else
-          termWrite("  " .. i .. ". " .. name .. " ")
+          dispWrite("  " .. i .. ". " .. name .. " ")
         end
         listY = listY + 1
       end
 
       local bottomY = listY + 1
-      termSetCursorPos(1, bottomY)
-      termSetTextColor(colors.darkGray)
-      termSetBackgroundColor(colors.black)
-      termWriteLn("")
-      termSetCursorPos(2, bottomY + 1)
-      termWrite("A. Add Frog Port")
-      termSetCursorPos(2, bottomY + 2)
-      termWrite("R. Remove Frog Port")
-      termSetCursorPos(2, bottomY + 3)
-      termWrite("B. Back")
+      dispSetCursorPos(1, bottomY)
+      dispSetTextColor(colors.darkGray)
+      dispSetBackgroundColor(colors.black)
+      dispWriteLn("")
+      dispSetCursorPos(2, bottomY + 1)
+      dispWrite("A. Add Frog Port")
+      dispSetCursorPos(2, bottomY + 2)
+      dispWrite("R. Remove Frog Port")
+      dispSetCursorPos(2, bottomY + 3)
+      dispWrite("B. Back")
 
       listNeedsRedraw = false
     end
