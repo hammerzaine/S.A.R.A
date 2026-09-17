@@ -156,73 +156,6 @@ local function dispGetSize()
 end
 
 -- ---------------------------------------------------------------------------
--- ---------------------------------------------------------------------------
--- TERM-DIRECT OUTPUT (for computer-term-only rendering, e.g. main menu when
--- a monitor is also attached). These bypass the disp* routing and write
--- directly to _G.term so the computer screen and the monitor can show
--- different content simultaneously.
--- ---------------------------------------------------------------------------
-
-local function termWrite(text)
-  if has_term and has_term_write then
-    pcall(function() _G.term.write(text) end)
-  end
-end
-
-local function termWriteLn(text)
-  termWrite(text)
-  if has_term and has_term_getCursorPos then
-    local ok, y = pcall(function() return _G.term.getCursorPos() end)
-    if ok then
-      local ok2, h = pcall(function() return _G.term.getSize() end)
-      if ok2 and y and h and y >= h then
-        pcall(function() _G.term.scroll(1) end)
-        pcall(function() _G.term.setCursorPos(1, h) end)
-      else
-        pcall(function() _G.term.setCursorPos(1, y + 1) end)
-      end
-    end
-  end
-end
-
-local function termClear()
-  if has_term and has_term_clear then
-    pcall(function() _G.term.clear() end)
-  end
-end
-
-local function termSetCursorPos(x, y)
-  if has_term and has_term_setCursorPos then
-    pcall(function() _G.term.setCursorPos(x, y) end)
-  end
-end
-
-local function termSetTextColor(c)
-  if has_term and has_term_setTextColor and c then
-    pcall(function() _G.term.setTextColor(c) end)
-  end
-end
-
-local function termSetBackgroundColor(c)
-  if has_term and has_term_setBackgroundColor and c then
-    pcall(function() _G.term.setBackgroundColor(c) end)
-  end
-end
-
-local function termSetTextScale(scale)
-  if has_term and has_term_setTextScale then
-    pcall(function() _G.term.setTextScale(scale) end)
-  end
-end
-
-local function termGetSize()
-  if has_term and has_term_getCursorPos then
-    local ok, w, h = pcall(function() return _G.term.getSize() end)
-    if ok then return w, h end
-  end
-  return 51, 19
-end
-
 -- INPUT
 -- ---------------------------------------------------------------------------
 
@@ -631,22 +564,22 @@ end
 -- ---------------------------------------------------------------------------
 
 local function drawHeader(title)
-  local w, h = termGetSize()
-  termClear()
-  termSetTextScale(1.0)
-  termSetBackgroundColor(colors.black)
-  termSetTextColor(colors.yellow)
+  local w, h = dispGetSize()
+  dispClear()
+  dispSetTextScale(1.0)
+  dispSetBackgroundColor(colors.black)
+  dispSetTextColor(colors.yellow)
   local titleLen = #title
   local pad = math.floor((w - titleLen) / 2)
   if pad < 0 then pad = 0 end
-  termSetCursorPos(1, 1)
-  termWrite(string.rep("=", w))
-  termWriteLn()
-  termSetCursorPos(1, 2)
-  termWrite(string.rep(" ", pad) .. title .. string.rep(" ", w - pad - titleLen))
-  termWriteLn()
-  termWrite(string.rep("=", w))
-  termWriteLn()
+  dispSetCursorPos(1, 1)
+  dispWrite(string.rep("=", w))
+  dispWriteLn()
+  dispSetCursorPos(1, 2)
+  dispWrite(string.rep(" ", pad) .. title .. string.rep(" ", w - pad - titleLen))
+  dispWriteLn()
+  dispWrite(string.rep("=", w))
+  dispWriteLn()
 end
 
 local dashboardBlinkPhase = 0
@@ -756,8 +689,8 @@ local function drawMainMenu()
   -- This keeps the menu and the gauge list visible at the same time.
 
   -- --- Computer term: menu + stock overview ---
-  local tw, th = termGetSize()
-  termClear()
+  local tw, th = dispGetSize()
+  dispClear()
   drawHeader("FACTORY GAUGE")
 
   local items = {
@@ -771,24 +704,24 @@ local function drawMainMenu()
   for i, item in ipairs(items) do
     local isSelected = (i == selectedIndex)
     if isSelected then
-      termSetTextColor(colors.white)
+      dispSetTextColor(colors.white)
     else
-      termSetTextColor(colors.gray)
+      dispSetTextColor(colors.gray)
     end
-    termSetCursorPos(2, ty)
+    dispSetCursorPos(2, ty)
     if isSelected then
-      termWrite("> " .. item.text .. string.rep(" ", tw - 4 - #item.text))
+      dispWrite("> " .. item.text .. string.rep(" ", tw - 4 - #item.text))
     else
-      termWrite("  " .. item.text .. string.rep(" ", tw - 4 - #item.text))
+      dispWrite("  " .. item.text .. string.rep(" ", tw - 4 - #item.text))
     end
     ty = ty + 1
   end
 
   -- Usage hint at the bottom of the computer term
-  termSetCursorPos(1, ty + 1)
-  termSetTextColor(colors.darkGray)
-  termSetBackgroundColor(colors.black)
-  termWrite("W/S: navigate  |  Enter: select  |  Q: quit")
+  dispSetCursorPos(1, ty + 1)
+  dispSetTextColor(colors.darkGray)
+  dispSetBackgroundColor(colors.black)
+  dispWrite("W/S: navigate  |  Enter: select  |  Q: quit")
   termFlush()
 
   -- --- Monitor: live factory gauge dashboard ---
@@ -1035,25 +968,25 @@ end
 -- ---------------------------------------------------------------------------
 
 local function showSettings()
-  termClear()
+  dispClear()
   drawHeader("SETTINGS")
 
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, 3)
-  termWriteLn("SETTINGS")
-  termWriteLn("")
-  termSetTextColor(colors.gray)
-  termSetCursorPos(1, 5)
-  termWriteLn("  Auto-scan peripherals:  Enabled")
-  termSetCursorPos(1, 6)
-  termWriteLn("  Default Frog Ports:     " .. (#frogPorts > 0 and table.concat(frogPorts, ", ") or "none"))
-  termSetCursorPos(1, 7)
-  termWriteLn("  Monitor auto-detect:    " .. (onMonitor and "Enabled" or "Disabled"))
-  termSetCursorPos(1, 8)
-  termSetCursorPos(1, 11)
-  termSetTextColor(colors.darkGray)
-  termWriteLn("")
-  termWriteLn("(press any key to return...)")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, 3)
+  dispWriteLn("SETTINGS")
+  dispWriteLn("")
+  dispSetTextColor(colors.gray)
+  dispSetCursorPos(1, 5)
+  dispWriteLn("  Auto-scan peripherals:  Enabled")
+  dispSetCursorPos(1, 6)
+  dispWriteLn("  Default Frog Ports:     " .. (#frogPorts > 0 and table.concat(frogPorts, ", ") or "none"))
+  dispSetCursorPos(1, 7)
+  dispWriteLn("  Monitor auto-detect:    " .. (onMonitor and "Enabled" or "Disabled"))
+  dispSetCursorPos(1, 8)
+  dispSetCursorPos(1, 11)
+  dispSetTextColor(colors.darkGray)
+  dispWriteLn("")
+  dispWriteLn("(press any key to return...)")
   readkey()
 end
 
@@ -1068,72 +1001,72 @@ end
 -- stock ticker is refreshed.
 
 local function showCreateFactoryGauge()
-  local w, h = termGetSize()
-  termClear()
+  local w, h = dispGetSize()
+  dispClear()
   drawHeader("CREATE FACTORY GAUGE")
 
   local y = 3
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, y)
-  termWrite("Name this factory gauge:")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, y)
+  dispWrite("Name this factory gauge:")
   y = y + 1
   local name = readlnWithEcho("> ")
 
   if not name or name == "" then
     y = y + 1
-    termSetTextColor(colors.gray)
-    termSetCursorPos(1, y)
-    termWriteLn("(cancelled)")
+    dispSetTextColor(colors.gray)
+    dispSetCursorPos(1, y)
+    dispWriteLn("(cancelled)")
     y = y + 2
-    termSetTextColor(colors.darkGray)
-    termWriteLn("(press any key to return...)")
+    dispSetTextColor(colors.darkGray)
+    dispWriteLn("(press any key to return...)")
     readkey()
     return
   end
   name = string.match(name, "^%s*(.-)%s*$")
   if name == "" then
     y = y + 1
-    termSetTextColor(colors.gray)
-    termSetCursorPos(1, y)
-    termWriteLn("(empty name - cancelled)")
+    dispSetTextColor(colors.gray)
+    dispSetCursorPos(1, y)
+    dispWriteLn("(empty name - cancelled)")
     y = y + 2
-    termSetTextColor(colors.darkGray)
-    termWriteLn("(press any key to return...)")
+    dispSetTextColor(colors.darkGray)
+    dispWriteLn("(press any key to return...)")
     readkey()
     return
   end
   -- Reject duplicates
   if findGaugeByName(name) then
     y = y + 1
-    termSetTextColor(colors.red)
-    termSetCursorPos(1, y)
-    termWriteLn("A gauge with that name already exists.")
+    dispSetTextColor(colors.red)
+    dispSetCursorPos(1, y)
+    dispWriteLn("A gauge with that name already exists.")
     y = y + 2
-    termSetTextColor(colors.darkGray)
-    termWriteLn("(press any key to return...)")
+    dispSetTextColor(colors.darkGray)
+    dispWriteLn("(press any key to return...)")
     readkey()
     return
   end
 
   -- Frog port selection
   y = y + 1
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, y)
-  termWrite("Assign to Frog Port:")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, y)
+  dispWrite("Assign to Frog Port:")
   y = y + 1
   if #frogPorts == 0 then
-    termSetTextColor(colors.gray)
-    termSetCursorPos(2, y)
-    termWriteLn("(no frog ports configured - go to Frog Port menu)")
+    dispSetTextColor(colors.gray)
+    dispSetCursorPos(2, y)
+    dispWriteLn("(no frog ports configured - go to Frog Port menu)")
     y = y + 1
-    termSetTextColor(colors.white)
-    termSetCursorPos(1, y)
-    termWrite("Using default (no port):")
+    dispSetTextColor(colors.white)
+    dispSetCursorPos(1, y)
+    dispWrite("Using default (no port):")
     y = y + 1
   else
     for i, portName in ipairs(frogPorts) do
-      termSetCursorPos(2, y)
-      termWrite(i .. ". " .. portName)
+      dispSetCursorPos(2, y)
+      dispWrite(i .. ". " .. portName)
       y = y + 1
     end
   end
@@ -1146,34 +1079,34 @@ local function showCreateFactoryGauge()
       chosenPort = frogPorts[num]
     else
       -- If they typed something that isn't a valid number, just leave it blank.
-      termSetTextColor(colors.gray)
-      termSetCursorPos(1, y)
-      termWriteLn("(invalid selection - no port assigned)")
+      dispSetTextColor(colors.gray)
+      dispSetCursorPos(1, y)
+      dispWriteLn("(invalid selection - no port assigned)")
       y = y + 1
     end
   end
 
   -- Quantity (1-100)
   y = y + 1
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, y)
-  termWrite("Quantity needed (1-100):")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, y)
+  dispWrite("Quantity needed (1-100):")
   y = y + 1
   local qtyChoice = readlnWithEcho("> ")
   local qty = tonumber(qtyChoice)
   if not qty or qty < 1 or qty > 100 then
     qty = 10
-    termSetTextColor(colors.gray)
-    termSetCursorPos(1, y)
-    termWriteLn("(invalid - defaulting to 10)")
+    dispSetTextColor(colors.gray)
+    dispSetCursorPos(1, y)
+    dispWriteLn("(invalid - defaulting to 10)")
     y = y + 1
   end
 
   -- Mode: stack or item
   y = y + 1
-  termSetTextColor(colors.white)
-  termSetCursorPos(1, y)
-  termWrite("Mode: 1 = stack  2 = item")
+  dispSetTextColor(colors.white)
+  dispSetCursorPos(1, y)
+  dispWrite("Mode: 1 = stack  2 = item")
   y = y + 1
   local modeChoice = readlnWithEcho("> ")
   local mode = "stack"
@@ -1181,9 +1114,9 @@ local function showCreateFactoryGauge()
   if modeNum == 2 then
     mode = "item"
   elseif modeNum ~= 1 and modeNum ~= nil then
-    termSetTextColor(colors.gray)
-    termSetCursorPos(1, y)
-    termWriteLn("(invalid - defaulting to stack)")
+    dispSetTextColor(colors.gray)
+    dispSetCursorPos(1, y)
+    dispWriteLn("(invalid - defaulting to stack)")
     y = y + 1
   end
 
@@ -1200,20 +1133,20 @@ local function showCreateFactoryGauge()
 
   -- Confirm
   y = y + 1
-  termSetTextColor(colors.green)
-  termSetCursorPos(1, y)
-  termWriteLn("Created: " .. gaugeDisplayName(gauge))
-  termSetTextColor(colors.gray)
-  termSetCursorPos(1, y + 1)
+  dispSetTextColor(colors.green)
+  dispSetCursorPos(1, y)
+  dispWriteLn("Created: " .. gaugeDisplayName(gauge))
+  dispSetTextColor(colors.gray)
+  dispSetCursorPos(1, y + 1)
   if chosenPort ~= "" then
-    termWriteLn("  Frog Port: " .. chosenPort)
+    dispWriteLn("  Frog Port: " .. chosenPort)
   else
-    termWriteLn("  Frog Port: (none)")
+    dispWriteLn("  Frog Port: (none)")
   end
-  termWriteLn("  Qty: " .. qty .. " (" .. mode .. ")")
+  dispWriteLn("  Qty: " .. qty .. " (" .. mode .. ")")
   y = y + 3
-  termSetTextColor(colors.darkGray)
-  termWriteLn("(press any key to return...)")
+  dispSetTextColor(colors.darkGray)
+  dispWriteLn("(press any key to return...)")
   readkey()
 end
 
@@ -1226,19 +1159,19 @@ end
 -- change qty, mode, inactive status, or delete the gauge. Press B to go back.
 
 local function showWorkingGaugesList()
-  local w, h = termGetSize()
+  local w, h = dispGetSize()
   if #factoryGauges == 0 then
-    termClear()
+    dispClear()
     drawHeader("WORKING GAUGES")
-    termSetTextColor(colors.gray)
-    termSetCursorPos(1, 3)
-    termWriteLn("No factory gauges created yet.")
-    termWriteLn("")
-    termSetCursorPos(1, 5)
-    termWriteLn("Go to 'Create factory gauge' to add one.")
-    termWriteLn("")
-    termSetTextColor(colors.darkGray)
-    termWriteLn("(press any key to return...)")
+    dispSetTextColor(colors.gray)
+    dispSetCursorPos(1, 3)
+    dispWriteLn("No factory gauges created yet.")
+    dispWriteLn("")
+    dispSetCursorPos(1, 5)
+    dispWriteLn("Go to 'Create factory gauge' to add one.")
+    dispWriteLn("")
+    dispSetTextColor(colors.darkGray)
+    dispWriteLn("(press any key to return...)")
     readkey()
     return
   end
@@ -1249,34 +1182,34 @@ local function showWorkingGaugesList()
 
   while true do
     if needsRedraw then
-      termClear()
+      dispClear()
       drawHeader("WORKING GAUGES")
       local y = 3
       for i, g in ipairs(sorted) do
         local isSel = (i == selectedIdx)
         if isSel then
-          termSetTextColor(colors.white)
-          termSetBackgroundColor(colors.blue)
+          dispSetTextColor(colors.white)
+          dispSetBackgroundColor(colors.blue)
         else
-          termSetTextColor(colors.gray)
-          termSetBackgroundColor(colors.black)
+          dispSetTextColor(colors.gray)
+          dispSetBackgroundColor(colors.black)
         end
-        termSetCursorPos(2, y)
+        dispSetCursorPos(2, y)
         local status = gaugeWorking(g) and "ON " or "OFF"
         local txt = string.format("%d. %s [%s] %s", i, g.name, status,
                                    g.frogPort ~= "" and ("-> " .. g.frogPort) or "")
         local padded = txt .. string.rep(" ", math.max(1, w - 4 - #txt))
         if isSel then
-          termWrite("> " .. padded)
+          dispWrite("> " .. padded)
         else
-          termWrite("  " .. padded)
+          dispWrite("  " .. padded)
         end
         y = y + 1
       end
-      termSetTextColor(colors.darkGray)
-      termSetBackgroundColor(colors.black)
-      termSetCursorPos(1, y + 1)
-      termWrite("W/S: navigate  |  Enter: edit  |  B: back")
+      dispSetTextColor(colors.darkGray)
+      dispSetBackgroundColor(colors.black)
+      dispSetCursorPos(1, y + 1)
+      dispWrite("W/S: navigate  |  Enter: edit  |  B: back")
       needsRedraw = false
     end
 
@@ -1334,65 +1267,65 @@ end
 -- to the gauge record. Press B to return to the list.
 
 local function showGaugeEditor(g)
-  local w, h = termGetSize()
+  local w, h = dispGetSize()
   while true do
-    termClear()
+    dispClear()
     drawHeader("EDIT: " .. g.name)
 
     local y = 3
-    termSetTextColor(colors.white)
-    termSetCursorPos(1, y)
-    termWrite("Name: " .. g.name)
+    dispSetTextColor(colors.white)
+    dispSetCursorPos(1, y)
+    dispWrite("Name: " .. g.name)
     y = y + 1
 
     local statusText = gaugeWorking(g) and "ACTIVE" or "INACTIVE"
     local statusColor = gaugeWorking(g) and colors.green or colors.yellow
-    termSetTextColor(statusColor)
-    termSetCursorPos(1, y)
-    termWrite("Status: " .. statusText)
+    dispSetTextColor(statusColor)
+    dispSetCursorPos(1, y)
+    dispWrite("Status: " .. statusText)
     y = y + 1
 
     if g.frogPort ~= "" then
-      termSetCursorPos(1, y)
-      termWrite("Frog Port: " .. g.frogPort)
+      dispSetCursorPos(1, y)
+      dispWrite("Frog Port: " .. g.frogPort)
       y = y + 1
     else
-      termSetCursorPos(1, y)
-      termWrite("Frog Port: (none)")
+      dispSetCursorPos(1, y)
+      dispWrite("Frog Port: (none)")
       y = y + 1
     end
 
     local neededTxt = (g.mode == "stack" and (g.qty .. " stacks = " .. (g.qty * 64) .. " items"))
                       or (g.qty .. " items")
-    termSetCursorPos(1, y)
-    termWrite("Needed: " .. g.qty .. " " .. g.mode .. "s  (" .. neededTxt .. ")")
+    dispSetCursorPos(1, y)
+    dispWrite("Needed: " .. g.qty .. " " .. g.mode .. "s  (" .. neededTxt .. ")")
     y = y + 1
 
     local stock = 0
-    termSetCursorPos(1, y)
+    dispSetCursorPos(1, y)
     if stock >= neededCount(g) then
-      termSetTextColor(colors.green)
+      dispSetTextColor(colors.green)
     elseif stock > 0 then
-      termSetTextColor(colors.yellow)
+      dispSetTextColor(colors.yellow)
     else
-      termSetTextColor(colors.red)
+      dispSetTextColor(colors.red)
     end
-    termWrite("On stock: " .. stock)
+    dispWrite("On stock: " .. stock)
     y = y + 2
 
-    termSetTextColor(colors.darkGray)
-    termWriteLn("")
-    termSetCursorPos(1, y)
-    termWrite("1. Edit quantity")
+    dispSetTextColor(colors.darkGray)
+    dispWriteLn("")
+    dispSetCursorPos(1, y)
+    dispWrite("1. Edit quantity")
     y = y + 1
-    termWrite("2. Toggle stack/item mode")
+    dispWrite("2. Toggle stack/item mode")
     y = y + 1
-    termWrite("3. Toggle active/inactive")
+    dispWrite("3. Toggle active/inactive")
     y = y + 1
-    termWrite("4. Delete this gauge")
+    dispWrite("4. Delete this gauge")
     y = y + 2
-    termSetTextColor(colors.darkGray)
-    termWriteLn("(press any key to return...)")
+    dispSetTextColor(colors.darkGray)
+    dispWriteLn("(press any key to return...)")
 
     local key = readkey()
     if not key then break end
@@ -1404,8 +1337,8 @@ local function showGaugeEditor(g)
         g.qty = nq
         saveConfig()
       else
-        termSetTextColor(colors.gray)
-        termWriteLn("(invalid - unchanged)")
+        dispSetTextColor(colors.gray)
+        dispWriteLn("(invalid - unchanged)")
         readkey()
       end
     elseif key == "2" then
@@ -1423,14 +1356,14 @@ local function showGaugeEditor(g)
           break
         end
       end
-      termClear()
+      dispClear()
       drawHeader("GAUGE DELETED")
-      termSetTextColor(colors.gray)
-      termSetCursorPos(1, 3)
-      termWriteLn("Gauge deleted: " .. g.name)
-      termWriteLn("")
-      termSetTextColor(colors.darkGray)
-      termWriteLn("(press any key to return...)")
+      dispSetTextColor(colors.gray)
+      dispSetCursorPos(1, 3)
+      dispWriteLn("Gauge deleted: " .. g.name)
+      dispWriteLn("")
+      dispSetTextColor(colors.darkGray)
+      dispWriteLn("(press any key to return...)")
       readkey()
       return
     else
@@ -1484,7 +1417,7 @@ local function main()
   if onMonitor then
     dispClear()
     dispSetCursorPos(1, 1)
-    termSetTextColor(colors.green)
+    dispSetTextColor(colors.green)
     pcall(function() _G.term.write("Monitor ready. Keyboard input goes through the") end)
     pcall(function() _G.term.write("computer - use the computer's keyboard.") end)
     sleep(2)
