@@ -918,6 +918,7 @@ local function showFrogPortList()
       if not key then break end
       if key == "a" or key == "enter" then
         addFrogPort()
+        drainEventQueue()
         selectedIndex = 1
       else
         break
@@ -998,6 +999,7 @@ local function showFrogPortList()
 
     elseif isA then
       addFrogPort()
+      drainEventQueue()
       -- After adding, clamp selectedIndex to the new list size.
       if selectedIndex > #frogPorts then
         selectedIndex = #frogPorts
@@ -1006,6 +1008,7 @@ local function showFrogPortList()
 
     elseif isR then
       removeFrogPort()
+      drainEventQueue()
       -- After removing, clamp selectedIndex.
       if #frogPorts > 0 and selectedIndex > #frogPorts then
         selectedIndex = #frogPorts
