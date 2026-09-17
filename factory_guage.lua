@@ -43,7 +43,7 @@ if has_peripheral_find then
     onMonitor = true
     _diag("[diag] monitor: DETECTED")
   else
-    _diag("[diag] monitor: NOT FOUND — using terminal")
+    _diag("[diag] monitor: NOT FOUND - using terminal")
   end
 else
   _diag("[diag] monitor: peripheral.find unavailable")
@@ -222,7 +222,7 @@ end
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
--- INPUT — with screen echo
+-- INPUT - with screen echo
 -- ---------------------------------------------------------------------------
 
 -- Build KEY_LABEL before any input function references it.
@@ -301,7 +301,7 @@ local function readlnWithEcho(promptText)
       local c = data
       if type(c) == "string" and #c == 1 then
         -- Skip if this char was already handled via a key event
-        -- (CC:T fires key event first, then char — both for same key).
+        -- (CC:T fires key event first, then char - both for same key).
         if charPending[c] then
           charPending[c] = nil
         elseif c == "\n" or c == "\r" then
@@ -410,8 +410,8 @@ local function readkey()
         end
     elseif evt == "key" or evt == "key_up" then
       -- Only return special keys from key events; letters come via "char".
-      -- Ignore "key_down" — it duplicates the "key" event.
-      -- Also ignore "key_up" for the same key — the "key" event already fired.
+      -- Ignore "key_down" - it duplicates the "key" event.
+      -- Also ignore "key_up" for the same key - the "key" event already fired.
       if evt == "key" and type(data) == "number" then
         local label = KEY_LABEL[data]
         if label then
@@ -541,7 +541,7 @@ end
 
 
 -- ---------------------------------------------------------------------------
--- READ STOCK FROM TICKER — comprehensive probing
+-- READ STOCK FROM TICKER - comprehensive probing
 -- ---------------------------------------------------------------------------
 
 
@@ -757,7 +757,7 @@ local function addFrogPort()
       termWriteLn("Added: " .. name)
     else
       termWriteLn("")
-      termWriteLn("(empty name — not added)")
+      termWriteLn("(empty name - not added)")
     end
   else
     termWriteLn("")
@@ -811,7 +811,7 @@ local function removeFrogPort()
       termWriteLn("Removed: " .. removed)
     else
       termWriteLn("")
-      termWriteLn("Invalid number — enter a number from 1 to " .. #frogPorts)
+      termWriteLn("Invalid number - enter a number from 1 to " .. #frogPorts)
     end
   else
     termWriteLn("")
@@ -934,7 +934,7 @@ local function showFrogPortList()
       if #frogPorts > 0 and selectedIndex > #frogPorts then
         selectedIndex = #frogPorts
       elseif #frogPorts == 0 then
-        -- List empty — exit the modal.
+        -- List empty - exit the modal.
         break
       end
       listNeedsRedraw = true
@@ -1010,7 +1010,7 @@ local function showCreateFactoryGauge()
     y = y + 1
     termSetTextColor(colors.gray)
     termSetCursorPos(1, y)
-    termWriteLn("(empty name — cancelled)")
+    termWriteLn("(empty name - cancelled)")
     y = y + 2
     termSetTextColor(colors.darkGray)
     termWriteLn("(press any key to return...)")
@@ -1039,7 +1039,7 @@ local function showCreateFactoryGauge()
   if #frogPorts == 0 then
     termSetTextColor(colors.gray)
     termSetCursorPos(2, y)
-    termWriteLn("(no frog ports configured — go to Frog Port menu)")
+    termWriteLn("(no frog ports configured - go to Frog Port menu)")
     y = y + 1
     termSetTextColor(colors.white)
     termSetCursorPos(1, y)
@@ -1063,7 +1063,7 @@ local function showCreateFactoryGauge()
       -- If they typed something that isn't a valid number, just leave it blank.
       termSetTextColor(colors.gray)
       termSetCursorPos(1, y)
-      termWriteLn("(invalid selection — no port assigned)")
+      termWriteLn("(invalid selection - no port assigned)")
       y = y + 1
     end
   end
@@ -1080,7 +1080,7 @@ local function showCreateFactoryGauge()
     qty = 10
     termSetTextColor(colors.gray)
     termSetCursorPos(1, y)
-    termWriteLn("(invalid — defaulting to 10)")
+    termWriteLn("(invalid - defaulting to 10)")
     y = y + 1
   end
 
@@ -1098,7 +1098,7 @@ local function showCreateFactoryGauge()
   elseif modeNum ~= 1 and modeNum ~= nil then
     termSetTextColor(colors.gray)
     termSetCursorPos(1, y)
-    termWriteLn("(invalid — defaulting to stack)")
+    termWriteLn("(invalid - defaulting to stack)")
     y = y + 1
   end
 
@@ -1320,7 +1320,7 @@ local function showGaugeEditor(g)
         saveConfig()
       else
         termSetTextColor(colors.gray)
-        termWriteLn("(invalid — unchanged)")
+        termWriteLn("(invalid - unchanged)")
         readkey()
       end
     elseif key == "2" then
@@ -1403,7 +1403,7 @@ local function loadConfig()
   if not has_io then return false end
   local f, err = io.open(CONFIG_FILE, "r")
   if not f then
-    -- No config file yet — that's fine.
+    -- No config file yet - that's fine.
     return false
   end
   local content = f:read("*all")
@@ -1458,7 +1458,7 @@ local function main()
 
   -- Load frog ports from sign text if available AND no config file was loaded.
   -- If a config file provided frogPorts, keep those. If nothing was loaded,
-  -- start with an empty list — users add ports manually via the menu.
+  -- start with an empty list - users add ports manually via the menu.
   if #frogPorts == 0 then
     if #clipboardNames > 0 then
       frogPorts = clipboardNames
@@ -1469,14 +1469,14 @@ local function main()
   selectedIndex = 1
   currentScreen = "main"
 
-  -- Read initial stock from ticker — results go to computer's term via print()
+  -- Read initial stock from ticker - results go to computer's term via print()
 
   if onMonitor then
     dispClear()
     dispSetCursorPos(1, 1)
     termSetTextColor(colors.green)
     pcall(function() _G.term.write("Monitor ready. Keyboard input goes through the") end)
-    pcall(function() _G.term.write("computer — use the computer's keyboard.") end)
+    pcall(function() _G.term.write("computer - use the computer's keyboard.") end)
     sleep(2)
   end
 
@@ -1523,14 +1523,14 @@ local function main()
             end
           elseif evt == "key" or evt == "key_up" then
             -- "key" events for letters are duplicates of the "char" event
-            -- we already handled — ignore them. Only handle special keys.
+            -- we already handled - ignore them. Only handle special keys.
             -- We only accept "key" (not "key_up" or "key_down") to avoid
             -- double-firing on arrow/enter keys.
             if evt == "key" and type(data) == "number" then
               local label = KEY_LABEL[data]
               if label == "enter" or label == "up" or label == "down" or label == "escape" then
                 -- If we just processed a char event, this key event is a
-                -- duplicate from CC:T — skip it.
+                -- duplicate from CC:T - skip it.
                 if skipNextKey == "char" then
                   skipNextKey = nil
                 else
@@ -1549,9 +1549,9 @@ local function main()
               end
             end
           end
-          -- Ignore "key_down" events entirely — they duplicate the "key" event.
+          -- Ignore "key_down" events entirely - they duplicate the "key" event.
           if not key then
-            -- Unrecognised event (e.g. a modifier) — keep waiting.
+            -- Unrecognised event (e.g. a modifier) - keep waiting.
           else
             local isUp    = (key == "w" or key == "up")
             local isDown  = (key == "s" or key == "down")
