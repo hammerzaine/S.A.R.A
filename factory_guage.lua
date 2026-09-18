@@ -1,3 +1,5 @@
+print("factory_guage: starting...")
+
 -- ---------------------------------------------------------------------------
 -- ENVIRONMENT DETECTION
 -- ---------------------------------------------------------------------------
@@ -33,20 +35,8 @@ if has_io then _diag("[diag] io.read: AVAILABLE") end
 
 local monitor = nil
 local onMonitor = false
-
-if has_peripheral_find then
-  monitor = _G.peripheral.find("monitor")
-  if monitor then
-    onMonitor = true
-    _diag("[diag] monitor: DETECTED")
-  else
-    _diag("[diag] monitor: NOT FOUND - using terminal")
-  end
-else
-  _diag("[diag] monitor: peripheral.find unavailable")
-end
-
-local display = monitor or (_G.term or nil)
+local display = _G.term or nil
+_diag("[diag] monitor: using terminal (no auto-detect)")
 
 -- ---------------------------------------------------------------------------
 -- OUTPUT HELPERS
@@ -917,6 +907,8 @@ local function showFrogPortList()
         addFrogPort()
         drainEventQueue()
         selectedIndex = 1
+      elseif key == "b" then
+        break
       else
         break
       end
