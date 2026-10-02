@@ -1,0 +1,69 @@
+# S.A.R.A Agent Configuration
+
+# Active provider (ollama, openai, gemini, copilot, anthropic, openrouter)
+provider:
+  active: "ollama"
+
+# Provider configurations
+providers:
+  ollama:
+    base_url: "http://192.168.2.176:11434"
+    model: "S.A.R.A-v3c:latest"
+
+  openai:
+    api_key: ""  # Set via OPENAI_API_KEY env var
+    model: "gpt-4o"
+    base_url: "https://api.openai.com/v1"
+
+  gemini:
+    api_key: ""  # Set via GEMINI_API_KEY env var
+    model: "gemini-2.0-flash"
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+
+  copilot:
+    api_key: ""  # Set via COPILOT_GITHUB_TOKEN env var
+    model: "gpt-4o"
+    base_url: "https://api.githubcopilot.com"
+
+  anthropic:
+    api_key: ""  # Set via ANTHROPIC_API_KEY env var
+    model: "claude-sonnet-4"
+    base_url: "https://api.anthropic.com/v1"
+
+  openrouter:
+    api_key: ""  # Set via OPENROUTER_API_KEY env var
+    model: "openai/gpt-4o"
+    base_url: "https://openrouter.ai/api/v1"
+
+# Model settings
+model:
+  default: "S.A.R.A-v3c:latest"
+  provider: "custom"
+  base_url: "http://192.168.2.176:11434/v1"
+  api_key: ""
+  context_length: 65536
+
+agent:
+  max_turns: 90
+  tool_use_enforcement: true
+
+display:
+  skin: "sara"
+  interface: "cli"
+  show_reasoning: true
+  show_cost: false
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+
+# Web UI settings
+web:
+  host: "0.0.0.0"
+  port: 8800
+  enabled: true
+
+# Authorization
+auth:
+  bypass_billing_for_authorized: true
+  authorized_users_file: "sara_auth.py"

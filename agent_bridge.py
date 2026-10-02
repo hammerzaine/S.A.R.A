@@ -1,0 +1,590 @@
+"""S.A.R.A Agent Integration — Multi-Provider Web UI Bridge
+
+This module provides a unified interface to multiple AI providers:
+- Ollama (local)
+- OpenAI (ChatGPT)
+- Google Gemini
+- GitHub Copilot
+- Anthropic Claude
+- OpenRouter (access to many models)
+
+Each provider is configured via environment variables or config.yaml.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import json
+import threading
+import requests
+from pathlib import Path
+from typing import Optional, Callable, Dict, Any
+
+# Add the SaraAgent directory to the path
+SARA_ROOT = Path(__file__).parent
+sys.path.insert(0, str(SARA_ROOT))
+
+# Set HERMES_HOME if not set
+if "HERMES_HOME" not in os.environ:
+    os.environ["HERMES_HOME"] = str(SARA_ROOT)
+
+
+class BaseProvider:
+    """Base class for AI providers."""
+
+    def __init__(self, name: str, config: Dict[str, Any]):
+        self.name = name
+        self.config = config
+        self._initialized = False
+        self._init_error = None
+
+    def initialize(self) -> bool:
+        """Initialize the provider."""
+        raise NotImplementedError
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        """Send a message and return the response."""
+        raise NotImplementedError
+
+    def is_ready(self) -> bool:
+        return self._initialized
+
+    def get_status(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "initialized": self._initialized,
+            "error": self._init_error,
+        }
+
+
+class OllamaProvider(BaseProvider):
+    """Ollama local model provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("ollama", config)
+        self._base_url = config.get("base_url", "http://192.168.2.176:11434")
+        self._model = config.get("model", "S.A.R.A-v3c:latest")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        try:
+            response = requests.get(f"{self._base_url}/api/tags", timeout=10)
+            if response.status_code != 200:
+                self._init_error = f"Ollama API returned status {response.status_code}"
+                return False
+            data = response.json()
+            available_models = [m["name"] for m in data.get("models", [])]
+            if self._model not in available_models:
+                for m in available_models:
+                    if "sara" in m.lower():
+                        self._model = m
+                        break
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/api/chat",
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "message" in data and "content" in data["message"]:
+                            content = data["message"]["content"]
+                            full_response += content
+                            stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/api/chat",
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Ollama API returned status {response.status_code}"
+                data = response.json()
+                return data.get("message", {}).get("content", "No response")
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class OpenAIProvider(BaseProvider):
+    """OpenAI ChatGPT provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("openai", config)
+        self._api_key = config.get("api_key", os.environ.get("OPENAI_API_KEY", ""))
+        self._model = config.get("model", "gpt-4o")
+        self._base_url = config.get("base_url", "https://api.openai.com/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "OpenAI API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"OpenAI API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: OpenAI API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class GeminiProvider(BaseProvider):
+    """Google Gemini provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("gemini", config)
+        self._api_key = config.get("api_key", os.environ.get("GEMINI_API_KEY", ""))
+        self._model = config.get("model", "gemini-2.0-flash")
+        self._base_url = config.get("base_url", "https://generativelanguage.googleapis.com/v1beta")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Gemini API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models?key={self._api_key}",
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Gemini API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            url = f"{self._base_url}/models/{self._model}:generateContent?key={self._api_key}"
+            if stream_callback:
+                url += "&alt=sse"
+                response = requests.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json={"contents": [{"parts": [{"text": message}]}]},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "candidates" in data and data["candidates"]:
+                            content = data["candidates"][0].get("content", {})
+                            parts = content.get("parts", [])
+                            for part in parts:
+                                text = part.get("text", "")
+                                if text:
+                                    full_response += text
+                                    stream_callback(text)
+                return full_response
+            else:
+                response = requests.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json={"contents": [{"parts": [{"text": message}]}]},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Gemini API returned status {response.status_code}"
+                data = response.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class CopilotProvider(BaseProvider):
+    """GitHub Copilot provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("copilot", config)
+        self._api_key = config.get("api_key", os.environ.get("COPILOT_GITHUB_TOKEN", ""))
+        self._model = config.get("model", "gpt-4o")
+        self._base_url = config.get("base_url", "https://api.githubcopilot.com")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "GitHub Copilot token not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Copilot API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Copilot API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class AnthropicProvider(BaseProvider):
+    """Anthropic Claude provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("anthropic", config)
+        self._api_key = config.get("api_key", os.environ.get("ANTHROPIC_API_KEY", ""))
+        self._model = config.get("model", "claude-sonnet-4")
+        self._base_url = config.get("base_url", "https://api.anthropic.com/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Anthropic API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Anthropic API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/messages",
+                    headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True, "max_tokens": 4096},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if data.get("type") == "content_block_delta":
+                            text = data.get("delta", {}).get("text", "")
+                            if text:
+                                full_response += text
+                                stream_callback(text)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/messages",
+                    headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False, "max_tokens": 4096},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Anthropic API returned status {response.status_code}"
+                data = response.json()
+                return data["content"][0]["text"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class OpenRouterProvider(BaseProvider):
+    """OpenRouter provider (access to many models)."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("openrouter", config)
+        self._api_key = config.get("api_key", os.environ.get("OPENROUTER_API_KEY", ""))
+        self._model = config.get("model", "openai/gpt-4o")
+        self._base_url = config.get("base_url", "https://openrouter.ai/api/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "OpenRouter API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"OpenRouter API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: OpenRouter API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+# Provider registry
+PROVIDERS = {
+    "ollama": OllamaProvider,
+    "openai": OpenAIProvider,
+    "gemini": GeminiProvider,
+    "copilot": CopilotProvider,
+    "anthropic": AnthropicProvider,
+    "openrouter": OpenRouterProvider,
+}
+
+
+class SaraAgent:
+    """S.A.R.A Agent with multi-provider support."""
+
+    def __init__(self):
+        self._providers: Dict[str, BaseProvider] = {}
+        self._active_provider: Optional[str] = None
+        self._lock = threading.Lock()
+        self._config: Dict[str, Any] = {}
+
+    def load_config(self) -> Dict[str, Any]:
+        """Load provider configuration from config.yaml."""
+        try:
+            import yaml
+            config_path = SARA_ROOT / "config.yaml"
+            if config_path.exists():
+                with open(config_path) as f:
+                    return yaml.safe_load(f) or {}
+        except Exception:
+            pass
+        return {}
+
+    def initialize(self, provider_name: Optional[str] = None) -> bool:
+        """Initialize a specific provider or auto-detect."""
+        with self._lock:
+            self._config = self.load_config()
+
+            # If no provider specified, try to auto-detect
+            if provider_name is None:
+                provider_name = self._config.get("provider", {}).get("active", "ollama")
+
+            # Create provider instance
+            if provider_name not in PROVIDERS:
+                return False
+
+            # Get credentials from auth store
+            from sara_auth_store import get_auth_store
+            store = get_auth_store()
+            store.load()
+
+            cred = store.get_credential(provider_name)
+            provider_config = self._config.get("providers", {}).get(provider_name, {})
+
+            # Override with credential from store
+            if cred and cred.api_key:
+                provider_config["api_key"] = cred.api_key
+
+            provider_class = PROVIDERS[provider_name]
+            provider = provider_class(provider_config)
+
+            if provider.initialize():
+                self._providers[provider_name] = provider
+                self._active_provider = provider_name
+                return True
+
+            return False
+
+    def set_provider(self, provider_name: str) -> bool:
+        """Switch to a different provider."""
+        if provider_name in self._providers:
+            self._active_provider = provider_name
+            return True
+        return self.initialize(provider_name)
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        """Send a message through the active provider."""
+        if self._active_provider is None:
+            if not self.initialize():
+                return "Error: No provider available"
+
+        provider = self._providers.get(self._active_provider)
+        if provider is None:
+            return "Error: Provider not initialized"
+
+        return provider.chat(message, stream_callback)
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get status of all providers."""
+        status = {
+            "active_provider": self._active_provider,
+            "providers": {},
+        }
+        for name, provider in self._providers.items():
+            status["providers"][name] = provider.get_status()
+        return status
+
+    def list_providers(self) -> list:
+        """List all available providers."""
+        return list(PROVIDERS.keys())
+
+
+# Global agent instance
+_agent_instance: Optional[SaraAgent] = None
+_agent_lock = threading.Lock()
+
+
+def get_agent() -> SaraAgent:
+    """Get or create the global agent instance."""
+    global _agent_instance
+
+    if _agent_instance is not None:
+        return _agent_instance
+
+    with _agent_lock:
+        if _agent_instance is not None:
+            return _agent_instance
+
+        _agent_instance = SaraAgent()
+        return _agent_instance
+
+
+def process_message(message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+    """Process a message through the active provider."""
+    agent = get_agent()
+    return agent.chat(message, stream_callback=stream_callback)

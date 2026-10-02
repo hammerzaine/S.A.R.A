@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets & credentials
+.env
+auth.json
+credentials.json
+.sara/
+*.key
+*.pem
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Large files
+*.tar.gz
+*.zip
+*.mp4
+*.mov
+
+# Hermes specific
+hermes-agent/
+website/static/img/
