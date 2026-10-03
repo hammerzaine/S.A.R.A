@@ -198,6 +198,10 @@ class GeminiProvider(BaseProvider):
         self._model = config.get("model", "gemini-2.0-flash")
         self._base_url = config.get("base_url", "https://generativelanguage.googleapis.com/v1beta")
 
+    def _get_endpoint(self) -> str:
+        """Build the correct Gemini API endpoint."""
+        return f"{self._base_url}/models/{self._model}:generateContent?key={self._api_key}"
+
     def initialize(self) -> bool:
         if self._initialized:
             return True
@@ -223,7 +227,7 @@ class GeminiProvider(BaseProvider):
             if not self.initialize():
                 return f"Error: {self._init_error}"
         try:
-            url = f"{self._base_url}/models/{self._model}:generateContent?key={self._api_key}"
+            url = self._get_endpoint()
             if stream_callback:
                 url += "&alt=sse"
                 response = requests.post(
@@ -253,7 +257,13 @@ class GeminiProvider(BaseProvider):
                     timeout=120,
                 )
                 if response.status_code != 200:
-                    return f"Error: Gemini API returned status {response.status_code}"
+                    error_detail = ""
+                    try:
+                        error_data = response.json()
+                        error_detail = f" - {error_data.get('error', {}).get('message', '')}"
+                    except Exception:
+                        pass
+                    return f"Error: Gemini API returned status {response.status_code}{error_detail}"
                 data = response.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
         except Exception as e:
