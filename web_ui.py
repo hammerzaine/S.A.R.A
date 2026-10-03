@@ -1283,6 +1283,84 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         });
         
+
+        // Add custom providers to dropdown
+        async function loadCustomProvidersDropdown() {
+            const providerSelect = document.getElementById('providerSelect');
+            if (!providerSelect) return;
+            
+            try {
+                const resp = await fetch('/api/custom-providers');
+                const data = await resp.json();
+                
+                // Remove old custom provider options (keep static ones)
+                const staticProviders = ['custom', 'openai', 'gemini', 'copilot', 'anthropic', 'openrouter', 'groq', 'mistral', 'deepseek', 'xai', 'together', 'fireworks', 'perplexity', 'opencodezen', 'kimi', 'minimax', 'zai', 'nous'];
+                const options = Array.from(providerSelect.options);
+                for (const option of options) {
+                    if (!staticProviders.includes(option.value)) {
+                        option.remove();
+                    }
+                }
+                
+                // Add custom providers
+                for (const provider of data.providers || []) {
+                    const option = document.createElement('option');
+                    option.value = provider.id;
+                    option.textContent = provider.name;
+                    providerSelect.appendChild(option);
+                }
+            } catch (e) {
+                console.error('Failed to load custom providers:', e);
+            }
+        }
+        
+        // Load custom providers dropdown on startup
+        setTimeout(loadCustomProvidersDropdown, 500);
+        
+        // Update loadModelsForProvider to handle custom providers
+        const originalLoadModels = loadModelsForProvider;
+        loadModelsForProvider = async function(provider) {
+            const modelSelect = document.getElementById('modelSelect');
+            if (!modelSelect) return;
+            
+            // Check if it's a custom provider (starts with "custom_")
+            if (provider.startsWith('custom_')) {
+                try {
+                    const resp = await fetch('/api/custom-providers');
+                    const data = await resp.json();
+                    const customProvider = data.providers.find(p => p.id === provider);
+                    
+                    if (customProvider) {
+                        // Fetch models from custom URL
+                        const modelsResp = await fetch('/api/fetch-models', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ base_url: customProvider.base_url, api_key: customProvider.api_key || '' })
+                        });
+                        const modelsData = await modelsResp.json();
+                        
+                        modelSelect.innerHTML = '';
+                        if (modelsData.success && modelsData.models.length > 0) {
+                            for (const model of modelsData.models) {
+                                const option = document.createElement('option');
+                                option.value = model;
+                                option.textContent = model;
+                                modelSelect.appendChild(option);
+                            }
+                        } else {
+                            modelSelect.innerHTML = '<option value="">Default model</option>';
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    console.error('Failed to load custom provider models:', e);
+                }
+            }
+            
+            // Fall back to original logic
+            return originalLoadModels(provider);
+        };
+        
         function openCredentials() {
             document.getElementById('credentialsPanel').classList.add('active');
             loadCredentials();
@@ -1467,8 +1545,54 @@ async def websocket_endpoint(websocket: WebSocket):
             # Get selected model
             model = message.get("model", "")
             
-            # Switch provider if requested
-            if provider_name != agent._active_provider:
+            # Handle custom providers (IDs start with "custom_")
+            if provider_name.startswith("custom_"):
+                # Load custom provider config
+                try:
+                    import json as json_mod
+                    providers_file = SARA_ROOT / "custom_providers.json"
+                    if providers_file.exists():
+                        with open(providers_file) as f:
+                            custom_providers = json_mod.load(f)
+                        
+                        custom_config = custom_providers.get(provider_name, {})
+                        if custom_config:
+                            # Initialize custom provider with saved config
+                            from agent_bridge import CustomProvider
+                            custom_provider = CustomProvider({
+                                "base_url": custom_config.get("base_url", ""),
+                                "model": model or custom_config.get("model", "default"),
+                                "api_key": custom_config.get("api_key", ""),
+                            })
+                            if custom_provider.initialize():
+                                agent._providers[provider_name] = custom_provider
+                                agent._active_provider = provider_name
+                            else:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": f"Failed to connect to custom provider: {custom_provider._init_error}"
+                                })
+                                continue
+                        else:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "Custom provider not found"
+                            })
+                            continue
+                    else:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "No custom providers configured"
+                        })
+                        continue
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Custom provider error: {str(e)}"
+                    })
+                    continue
+            # Switch provider if requested (for built-in providers)
+            elif provider_name != agent._active_provider:
                 if not agent.set_provider(provider_name, model if model else None):
                     await websocket.send_json({
                         "type": "error",
