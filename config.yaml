@@ -90,6 +90,11 @@ providers:
     model: "glm-4-plus"
     base_url: "https://open.bigmodel.cn/api/paas/v4"
 
+  nous:
+    api_key: ""  # Set via NOUS_API_KEY env var
+    model: "Hermes-3-Llama-3.1-8B"
+    base_url: "https://inference-api.nousresearch.com/v1"
+
 # Model settings
 model:
   default: "S.A.R.A-v3c:latest"

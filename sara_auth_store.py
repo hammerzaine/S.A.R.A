@@ -154,6 +154,13 @@ PROVIDERS = {
         "env_var": "GLM_API_KEY",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
     },
+    "nous": {
+        "name": "Nous Research",
+        "description": "Hermes models via Nous Portal (the makers of Hermes)",
+        "auth_type": "api_key",
+        "env_var": "NOUS_API_KEY",
+        "base_url": "https://inference-api.nousresearch.com/v1",
+    },
 }
 
 

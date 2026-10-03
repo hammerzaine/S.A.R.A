@@ -1212,6 +1212,75 @@ class ZAIProvider(BaseProvider):
             return f"Error: {str(e)}"
 
 
+
+class NousResearchProvider(BaseProvider):
+    """Nous Research provider (Hermes models via Nous Portal)."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("nous", config)
+        self._api_key = config.get("api_key", os.environ.get("NOUS_API_KEY", ""))
+        self._model = config.get("model", "Hermes-3-Llama-3.1-8B")
+        self._base_url = config.get("base_url", "https://inference-api.nousresearch.com/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Nous API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Nous API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Nous API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
 # Provider registry
 PROVIDERS = {
     "ollama": OllamaProvider,
@@ -1231,6 +1300,7 @@ PROVIDERS = {
     "kimi": KimiProvider,
     "minimax": MiniMaxProvider,
     "zai": ZAIProvider,
+    "nous": NousResearchProvider,
 }
 
 

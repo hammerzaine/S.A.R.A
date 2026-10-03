@@ -74,7 +74,7 @@ class Console:
 
     def splash(self, model: str, skills: int, facts: int, online: bool,
                commands: list[tuple[str, str]], version: str = "unknown",
-               upgrade: dict | None = None) -> None:
+               upgrade: dict | None = None, tools: int = 0) -> None:
         w = term_width()
         inner = w - 4
 
@@ -106,6 +106,7 @@ class Console:
         status = (f"{dot} {state}   "
                   + self._c("model ", GREY) + self._c(model, WHITE) + "   "
                   + self._c("skills ", GREY) + self._c(str(skills), VIOLET)
+                  + "   " + self._c("tools ", GREY) + self._c(str(tools), VIOLET)
                   + "   " + self._c("memories ", GREY)
                   + self._c(str(facts), VIOLET))
         pad = max(0, (inner - visible_len(status)) // 2)

@@ -476,8 +476,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <option value="kimi">Kimi / Moonshot</option>
                     <option value="minimax">MiniMax</option>
                     <option value="zai">Z.AI / GLM</option>
+                    <option value="nous">Nous Research (Hermes)</option>
                 </select>
             </div>
+            <button class="settings-btn" onclick="showSkills()">📚 Skills</button>
+            <button class="settings-btn" onclick="showTools()">🔧 Tools</button>
             <button class="settings-btn" onclick="openCredentials()">⚙ Settings</button>
             <div class="status-dot"></div>
             <span>Online</span>
@@ -509,6 +512,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <p>Loading...</p>
             </div>
             <button class="close-modal" onclick="closeCredentials()">Close</button>
+        </div>
+    </div>
+    
+
+    <div class="credentials-panel" id="skillsPanel">
+        <div class="credentials-modal">
+            <h2>Learned Skills</h2>
+            <div id="skillsContent">
+                <p>Loading...</p>
+            </div>
+            <button class="close-modal" onclick="closeSkills()">Close</button>
+        </div>
+    </div>
+    
+    <div class="credentials-panel" id="toolsPanel">
+        <div class="credentials-modal">
+            <h2>Available Tools</h2>
+            <div id="toolsContent">
+                <p>Loading...</p>
+            </div>
+            <button class="close-modal" onclick="closeTools()">Close</button>
         </div>
     </div>
     
@@ -596,6 +620,71 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function switchProvider() {
             const provider = document.getElementById('providerSelect').value;
             addMessage('Switched to ' + provider, 'system');
+        }
+        
+
+        function showSkills() {
+            document.getElementById('skillsPanel').classList.add('active');
+            loadSkills();
+        }
+        
+        function closeSkills() {
+            document.getElementById('skillsPanel').classList.remove('active');
+        }
+        
+        async function loadSkills() {
+            const content = document.getElementById('skillsContent');
+            try {
+                const resp = await fetch('/api/skills');
+                const data = await resp.json();
+                
+                let html = `<p>Total skills: ${data.count}</p>`;
+                html += '<div class="credential-list">';
+                
+                for (const skill of data.skills || []) {
+                    html += `<div class="credential-item">`;
+                    html += `<span class="label">${skill.name}</span>`;
+                    html += `<span style="color: var(--text-secondary); font-size: 0.75rem;">${skill.category || ''}</span>`;
+                    html += `</div>`;
+                }
+                
+                html += '</div>';
+                content.innerHTML = html || '<p>No skills found.</p>';
+            } catch (e) {
+                content.innerHTML = `<p>Error loading skills: ${e.message}</p>`;
+            }
+        }
+        
+        function showTools() {
+            document.getElementById('toolsPanel').classList.add('active');
+            loadTools();
+        }
+        
+        function closeTools() {
+            document.getElementById('toolsPanel').classList.remove('active');
+        }
+        
+        async function loadTools() {
+            const content = document.getElementById('toolsContent');
+            try {
+                const resp = await fetch('/api/tools');
+                const data = await resp.json();
+                
+                let html = `<p>Total tools: ${data.count}</p>`;
+                html += '<div class="credential-list">';
+                
+                for (const tool of data.tools || []) {
+                    html += `<div class="credential-item">`;
+                    html += `<span class="label">${tool.emoji || '⚡'} ${tool.name}</span>`;
+                    html += `<span style="color: var(--text-secondary); font-size: 0.75rem;">${tool.toolset || ''}</span>`;
+                    html += `</div>`;
+                }
+                
+                html += '</div>';
+                content.innerHTML = html || '<p>No tools found.</p>';
+            } catch (e) {
+                content.innerHTML = `<p>Error loading tools: ${e.message}</p>`;
+            }
         }
         
         function openCredentials() {
@@ -874,6 +963,49 @@ async def get_providers():
             for key, val in PROVIDERS.items()
         }
     }
+
+
+
+@app.get("/api/skills")
+async def get_skills():
+    """Get all learned skills."""
+    try:
+        from tools.skills_tool import _find_all_skills
+        skills = _find_all_skills()
+        return {
+            "count": len(skills),
+            "skills": [
+                {
+                    "name": s.get("name", ""),
+                    "description": s.get("description", ""),
+                    "category": s.get("category", ""),
+                }
+                for s in skills
+            ]
+        }
+    except Exception as e:
+        return {"error": str(e), "count": 0, "skills": []}
+
+
+@app.get("/api/tools")
+async def get_tools():
+    """Get all available tools."""
+    try:
+        from tools.registry import registry
+        tool_names = registry.get_all_tool_names()
+        return {
+            "count": len(tool_names),
+            "tools": [
+                {
+                    "name": name,
+                    "toolset": registry.get_toolset_for_tool(name) or "unknown",
+                    "emoji": registry.get_emoji(name, "⚡"),
+                }
+                for name in tool_names
+            ]
+        }
+    except Exception as e:
+        return {"error": str(e), "count": 0, "tools": []}
 
 
 @app.get("/api/health")
