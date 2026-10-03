@@ -1346,13 +1346,19 @@ class SaraAgent:
         """Initialize a specific provider or auto-detect."""
         with self._lock:
             self._config = self.load_config()
+            self._init_error = None
 
             # If no provider specified, try to auto-detect
             if provider_name is None:
                 provider_name = self._config.get("provider", {}).get("active", "custom")
 
+            # Handle custom provider IDs (custom_*)
+            if provider_name.startswith("custom_"):
+                return self._init_custom_provider(provider_name)
+
             # Create provider instance
             if provider_name not in PROVIDERS:
+                self._init_error = f"Unknown provider: {provider_name}"
                 return False
 
             # Get credentials from auth store
@@ -1375,6 +1381,42 @@ class SaraAgent:
                 self._active_provider = provider_name
                 return True
 
+            self._init_error = provider._init_error or "Provider initialization failed"
+            return False
+
+    def _init_custom_provider(self, provider_id: str) -> bool:
+        """Initialize a custom provider by its ID."""
+        try:
+            import json as json_mod
+            providers_file = SARA_ROOT / "custom_providers.json"
+            if not providers_file.exists():
+                self._init_error = "No custom providers configured"
+                return False
+
+            with open(providers_file) as f:
+                custom_providers = json_mod.load(f)
+
+            custom_config = custom_providers.get(provider_id)
+            if not custom_config:
+                self._init_error = f"Custom provider {provider_id} not found"
+                return False
+
+            from agent_bridge import CustomProvider
+            custom_provider = CustomProvider({
+                "base_url": custom_config.get("base_url", ""),
+                "model": custom_config.get("model", "default"),
+                "api_key": custom_config.get("api_key", ""),
+            })
+
+            if custom_provider.initialize():
+                self._providers[provider_id] = custom_provider
+                self._active_provider = provider_id
+                return True
+
+            self._init_error = custom_provider._init_error or "Custom provider connection failed"
+            return False
+        except Exception as e:
+            self._init_error = str(e)
             return False
 
     def set_provider(self, provider_name: str, model: Optional[str] = None) -> bool:

@@ -1514,22 +1514,7 @@ async def websocket_endpoint(websocket: WebSocket):
     if not agent.is_ready():
         await websocket.send_json({
             "type": "system",
-            "message": "Initializing S.A.R.A agent..."
-        })
-
-        # Initialize the agent
-        success = agent.initialize()
-
-        if not success:
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Failed to initialize agent: {agent._init_error}"
-            })
-            return
-
-        await websocket.send_json({
-            "type": "system",
-            "message": "S.A.R.A agent ready!"
+            "message": "S.A.R.A agent ready! Select a provider and start chatting."
         })
 
     try:
@@ -1547,48 +1532,10 @@ async def websocket_endpoint(websocket: WebSocket):
             
             # Handle custom providers (IDs start with "custom_")
             if provider_name.startswith("custom_"):
-                # Load custom provider config
-                try:
-                    import json as json_mod
-                    providers_file = SARA_ROOT / "custom_providers.json"
-                    if providers_file.exists():
-                        with open(providers_file) as f:
-                            custom_providers = json_mod.load(f)
-                        
-                        custom_config = custom_providers.get(provider_name, {})
-                        if custom_config:
-                            # Initialize custom provider with saved config
-                            from agent_bridge import CustomProvider
-                            custom_provider = CustomProvider({
-                                "base_url": custom_config.get("base_url", ""),
-                                "model": model or custom_config.get("model", "default"),
-                                "api_key": custom_config.get("api_key", ""),
-                            })
-                            if custom_provider.initialize():
-                                agent._providers[provider_name] = custom_provider
-                                agent._active_provider = provider_name
-                            else:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": f"Failed to connect to custom provider: {custom_provider._init_error}"
-                                })
-                                continue
-                        else:
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": "Custom provider not found"
-                            })
-                            continue
-                    else:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": "No custom providers configured"
-                        })
-                        continue
-                except Exception as e:
+                if not agent.initialize(provider_name, model if model else None):
                     await websocket.send_json({
                         "type": "error",
-                        "message": f"Custom provider error: {str(e)}"
+                        "message": f"Failed to connect: {agent._init_error}"
                     })
                     continue
             # Switch provider if requested (for built-in providers)
