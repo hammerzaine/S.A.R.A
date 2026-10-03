@@ -1342,7 +1342,7 @@ class SaraAgent:
             pass
         return {}
 
-    def initialize(self, provider_name: Optional[str] = None) -> bool:
+    def initialize(self, provider_name: Optional[str] = None, model: Optional[str] = None) -> bool:
         """Initialize a specific provider or auto-detect."""
         with self._lock:
             self._config = self.load_config()
@@ -1354,7 +1354,7 @@ class SaraAgent:
 
             # Handle custom provider IDs (custom_*)
             if provider_name.startswith("custom_"):
-                return self._init_custom_provider(provider_name)
+                return self._init_custom_provider(provider_name, model)
 
             # Create provider instance
             if provider_name not in PROVIDERS:
@@ -1384,7 +1384,7 @@ class SaraAgent:
             self._init_error = provider._init_error or "Provider initialization failed"
             return False
 
-    def _init_custom_provider(self, provider_id: str) -> bool:
+    def _init_custom_provider(self, provider_id: str, model: Optional[str] = None) -> bool:
         """Initialize a custom provider by its ID."""
         try:
             import json as json_mod
@@ -1404,7 +1404,7 @@ class SaraAgent:
             from agent_bridge import CustomProvider
             custom_provider = CustomProvider({
                 "base_url": custom_config.get("base_url", ""),
-                "model": custom_config.get("model", "default"),
+                "model": model or custom_config.get("model", "default"),
                 "api_key": custom_config.get("api_key", ""),
             })
 
