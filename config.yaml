@@ -35,6 +35,61 @@ providers:
     model: "openai/gpt-4o"
     base_url: "https://openrouter.ai/api/v1"
 
+  groq:
+    api_key: ""  # Set via GROQ_API_KEY env var
+    model: "llama-3.3-70b-versatile"
+    base_url: "https://api.groq.com/openai/v1"
+
+  mistral:
+    api_key: ""  # Set via MISTRAL_API_KEY env var
+    model: "mistral-large-latest"
+    base_url: "https://api.mistral.ai/v1"
+
+  deepseek:
+    api_key: ""  # Set via DEEPSEEK_API_KEY env var
+    model: "deepseek-chat"
+    base_url: "https://api.deepseek.com/v1"
+
+  xai:
+    api_key: ""  # Set via XAI_API_KEY env var
+    model: "grok-2-latest"
+    base_url: "https://api.x.ai/v1"
+
+  together:
+    api_key: ""  # Set via TOGETHER_API_KEY env var
+    model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    base_url: "https://api.together.xyz/v1"
+
+  fireworks:
+    api_key: ""  # Set via FIREWORKS_API_KEY env var
+    model: "accounts/fireworks/models/llama-v3p3-70b-instruct"
+    base_url: "https://api.fireworks.ai/inference/v1"
+
+  perplexity:
+    api_key: ""  # Set via PERPLEXITY_API_KEY env var
+    model: "sonar"
+    base_url: "https://api.perplexity.ai"
+
+  opencodezen:
+    api_key: ""  # Set via OPENCODE_ZEN_API_KEY env var
+    model: "opencode-zen"
+    base_url: "https://api.opencode.ai/v1"
+
+  kimi:
+    api_key: ""  # Set via KIMI_API_KEY env var
+    model: "moonshot-v1-128k"
+    base_url: "https://api.moonshot.ai/v1"
+
+  minimax:
+    api_key: ""  # Set via MINIMAX_API_KEY env var
+    model: "MiniMax-M1"
+    base_url: "https://api.minimax.io/v1"
+
+  zai:
+    api_key: ""  # Set via GLM_API_KEY env var
+    model: "glm-4-plus"
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+
 # Model settings
 model:
   default: "S.A.R.A-v3c:latest"

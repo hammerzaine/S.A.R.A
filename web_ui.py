@@ -465,6 +465,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <option value="copilot">GitHub Copilot</option>
                     <option value="anthropic">Anthropic (Claude)</option>
                     <option value="openrouter">OpenRouter</option>
+                    <option value="groq">Groq</option>
+                    <option value="mistral">Mistral AI</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="xai">xAI (Grok)</option>
+                    <option value="together">Together AI</option>
+                    <option value="fireworks">Fireworks AI</option>
+                    <option value="perplexity">Perplexity</option>
+                    <option value="opencodezen">OpenCode Zen</option>
+                    <option value="kimi">Kimi / Moonshot</option>
+                    <option value="minimax">MiniMax</option>
+                    <option value="zai">Z.AI / GLM</option>
                 </select>
             </div>
             <button class="settings-btn" onclick="openCredentials()">⚙ Settings</button>

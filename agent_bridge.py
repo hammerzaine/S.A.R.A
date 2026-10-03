@@ -463,6 +463,755 @@ class OpenRouterProvider(BaseProvider):
             return f"Error: {str(e)}"
 
 
+
+class GroqProvider(BaseProvider):
+    """Groq provider (fast inference, free tier available)."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("groq", config)
+        self._api_key = config.get("api_key", os.environ.get("GROQ_API_KEY", ""))
+        self._model = config.get("model", "llama-3.3-70b-versatile")
+        self._base_url = config.get("base_url", "https://api.groq.com/openai/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Groq API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Groq API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Groq API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class MistralProvider(BaseProvider):
+    """Mistral AI provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("mistral", config)
+        self._api_key = config.get("api_key", os.environ.get("MISTRAL_API_KEY", ""))
+        self._model = config.get("model", "mistral-large-latest")
+        self._base_url = config.get("base_url", "https://api.mistral.ai/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Mistral API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Mistral API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Mistral API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class DeepSeekProvider(BaseProvider):
+    """DeepSeek provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("deepseek", config)
+        self._api_key = config.get("api_key", os.environ.get("DEEPSEEK_API_KEY", ""))
+        self._model = config.get("model", "deepseek-chat")
+        self._base_url = config.get("base_url", "https://api.deepseek.com/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "DeepSeek API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"DeepSeek API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: DeepSeek API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class XAIProvider(BaseProvider):
+    """xAI (Grok) provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("xai", config)
+        self._api_key = config.get("api_key", os.environ.get("XAI_API_KEY", ""))
+        self._model = config.get("model", "grok-2-latest")
+        self._base_url = config.get("base_url", "https://api.x.ai/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "xAI API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"xAI API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: xAI API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class TogetherProvider(BaseProvider):
+    """Together AI provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("together", config)
+        self._api_key = config.get("api_key", os.environ.get("TOGETHER_API_KEY", ""))
+        self._model = config.get("model", "meta-llama/Llama-3.3-70B-Instruct-Turbo")
+        self._base_url = config.get("base_url", "https://api.together.xyz/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Together API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Together API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Together API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class FireworksProvider(BaseProvider):
+    """Fireworks AI provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("fireworks", config)
+        self._api_key = config.get("api_key", os.environ.get("FIREWORKS_API_KEY", ""))
+        self._model = config.get("model", "accounts/fireworks/models/llama-v3p3-70b-instruct")
+        self._base_url = config.get("base_url", "https://api.fireworks.ai/inference/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Fireworks API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Fireworks API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Fireworks API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class PerplexityProvider(BaseProvider):
+    """Perplexity provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("perplexity", config)
+        self._api_key = config.get("api_key", os.environ.get("PERPLEXITY_API_KEY", ""))
+        self._model = config.get("model", "sonar")
+        self._base_url = config.get("base_url", "https://api.perplexity.ai")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Perplexity API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Perplexity API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Perplexity API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class OpenCodeZenProvider(BaseProvider):
+    """OpenCode Zen provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("opencodezen", config)
+        self._api_key = config.get("api_key", os.environ.get("OPENCODE_ZEN_API_KEY", ""))
+        self._model = config.get("model", "opencode-zen")
+        self._base_url = config.get("base_url", "https://api.opencode.ai/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "OpenCode Zen API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"OpenCode Zen API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: OpenCode Zen API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class KimiProvider(BaseProvider):
+    """Kimi / Moonshot provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("kimi", config)
+        self._api_key = config.get("api_key", os.environ.get("KIMI_API_KEY", ""))
+        self._model = config.get("model", "moonshot-v1-128k")
+        self._base_url = config.get("base_url", "https://api.moonshot.ai/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Kimi API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Kimi API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Kimi API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class MiniMaxProvider(BaseProvider):
+    """MiniMax provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("minimax", config)
+        self._api_key = config.get("api_key", os.environ.get("MINIMAX_API_KEY", ""))
+        self._model = config.get("model", "MiniMax-M1")
+        self._base_url = config.get("base_url", "https://api.minimax.io/v1")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "MiniMax API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"MiniMax API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: MiniMax API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+class ZAIProvider(BaseProvider):
+    """Z.AI / GLM provider."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("zai", config)
+        self._api_key = config.get("api_key", os.environ.get("GLM_API_KEY", ""))
+        self._model = config.get("model", "glm-4-plus")
+        self._base_url = config.get("base_url", "https://open.bigmodel.cn/api/paas/v4")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._api_key:
+            self._init_error = "Z.AI API key not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Z.AI API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Z.AI API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
 # Provider registry
 PROVIDERS = {
     "ollama": OllamaProvider,
@@ -471,6 +1220,17 @@ PROVIDERS = {
     "copilot": CopilotProvider,
     "anthropic": AnthropicProvider,
     "openrouter": OpenRouterProvider,
+    "groq": GroqProvider,
+    "mistral": MistralProvider,
+    "deepseek": DeepSeekProvider,
+    "xai": XAIProvider,
+    "together": TogetherProvider,
+    "fireworks": FireworksProvider,
+    "perplexity": PerplexityProvider,
+    "opencodezen": OpenCodeZenProvider,
+    "kimi": KimiProvider,
+    "minimax": MiniMaxProvider,
+    "zai": ZAIProvider,
 }
 
 
