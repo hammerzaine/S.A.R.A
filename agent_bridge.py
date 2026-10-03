@@ -58,69 +58,6 @@ class BaseProvider:
         }
 
 
-class OllamaProvider(BaseProvider):
-    """Ollama local model provider."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__("ollama", config)
-        self._base_url = config.get("base_url", "http://192.168.2.176:11434")
-        self._model = config.get("model", "S.A.R.A-v3c:latest")
-
-    def initialize(self) -> bool:
-        if self._initialized:
-            return True
-        try:
-            response = requests.get(f"{self._base_url}/api/tags", timeout=10)
-            if response.status_code != 200:
-                self._init_error = f"Ollama API returned status {response.status_code}"
-                return False
-            data = response.json()
-            available_models = [m["name"] for m in data.get("models", [])]
-            if self._model not in available_models:
-                for m in available_models:
-                    if "sara" in m.lower():
-                        self._model = m
-                        break
-            self._initialized = True
-            return True
-        except Exception as e:
-            self._init_error = str(e)
-            return False
-
-    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
-        if not self._initialized:
-            if not self.initialize():
-                return f"Error: {self._init_error}"
-        try:
-            if stream_callback:
-                response = requests.post(
-                    f"{self._base_url}/api/chat",
-                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
-                    stream=True, timeout=120,
-                )
-                full_response = ""
-                for line in response.iter_lines():
-                    if line:
-                        data = json.loads(line)
-                        if "message" in data and "content" in data["message"]:
-                            content = data["message"]["content"]
-                            full_response += content
-                            stream_callback(content)
-                return full_response
-            else:
-                response = requests.post(
-                    f"{self._base_url}/api/chat",
-                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
-                    timeout=120,
-                )
-                if response.status_code != 200:
-                    return f"Error: Ollama API returned status {response.status_code}"
-                data = response.json()
-                return data.get("message", {}).get("content", "No response")
-        except Exception as e:
-            return f"Error: {str(e)}"
-
-
 class OpenAIProvider(BaseProvider):
     """OpenAI ChatGPT provider."""
 
@@ -1291,9 +1228,77 @@ class NousResearchProvider(BaseProvider):
             return f"Error: {str(e)}"
 
 
+
+class CustomProvider(BaseProvider):
+    """Custom/OpenAI-compatible provider with user-specified URL."""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("custom", config)
+        self._api_key = config.get("api_key", "")
+        self._model = config.get("model", "default")
+        self._base_url = config.get("base_url", "")
+
+    def initialize(self) -> bool:
+        if self._initialized:
+            return True
+        if not self._base_url:
+            self._init_error = "Custom provider URL not configured"
+            return False
+        try:
+            response = requests.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"} if self._api_key else {},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                self._init_error = f"Custom API returned status {response.status_code}"
+                return False
+            self._initialized = True
+            return True
+        except Exception as e:
+            self._init_error = str(e)
+            return False
+
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+        if not self._initialized:
+            if not self.initialize():
+                return f"Error: {self._init_error}"
+        try:
+            if stream_callback:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": True},
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                return full_response
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={"model": self._model, "messages": [{"role": "user", "content": message}], "stream": False},
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return f"Error: Custom API returned status {response.status_code}"
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
 # Provider registry
 PROVIDERS = {
-    "ollama": OllamaProvider,
     "openai": OpenAIProvider,
     "gemini": GeminiProvider,
     "copilot": CopilotProvider,
@@ -1311,6 +1316,7 @@ PROVIDERS = {
     "minimax": MiniMaxProvider,
     "zai": ZAIProvider,
     "nous": NousResearchProvider,
+    "custom": CustomProvider,
 }
 
 
@@ -1342,7 +1348,7 @@ class SaraAgent:
 
             # If no provider specified, try to auto-detect
             if provider_name is None:
-                provider_name = self._config.get("provider", {}).get("active", "ollama")
+                provider_name = self._config.get("provider", {}).get("active", "custom")
 
             # Create provider instance
             if provider_name not in PROVIDERS:

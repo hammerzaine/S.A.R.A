@@ -35,13 +35,6 @@ TERMINAL_AUTH_REASONS = {
 
 # Provider definitions
 PROVIDERS = {
-    "ollama": {
-        "name": "Ollama",
-        "description": "Local models via Ollama",
-        "auth_type": "none",
-        "env_var": None,
-        "base_url": "http://192.168.2.176:11434",
-    },
     "openai": {
         "name": "OpenAI",
         "description": "ChatGPT models (GPT-4o, etc.)",
@@ -160,6 +153,13 @@ PROVIDERS = {
         "auth_type": "api_key",
         "env_var": "NOUS_API_KEY",
         "base_url": "https://inference-api.nousresearch.com/v1",
+    },
+    "custom": {
+        "name": "Other (Custom URL)",
+        "description": "Any OpenAI-compatible API endpoint",
+        "auth_type": "custom",
+        "env_var": None,
+        "base_url": "",
     },
 }
 

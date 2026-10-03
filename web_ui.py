@@ -569,7 +569,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="status">
             <div class="provider-selector">
                 <select id="providerSelect" onchange="switchProvider()">
-                    <option value="ollama">Ollama (Local)</option>
+                    <option value="custom">Other (Custom URL)</option>
                     <option value="openai">OpenAI (ChatGPT)</option>
                     <option value="gemini">Google Gemini</option>
                     <option value="copilot">GitHub Copilot</option>
@@ -591,7 +591,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
             <button class="settings-btn" onclick="showSkills()">📚 Skills</button>
             <button class="settings-btn" onclick="showTools()">🔧 Tools</button>
-                        <button class="voice-btn" id="speakBtn" onclick="toggleSpeak()" title="Speak responses aloud">🔊 Speak</button>
+                        <button class="settings-btn" onclick="openCustomUrl()">🔗 Other</button>
+            <button class="voice-btn" id="speakBtn" onclick="toggleSpeak()" title="Speak responses aloud">🔊 Speak</button>
             <button class="voice-btn" id="autoSpeakBtn" onclick="toggleAutoSpeak()" title="Auto-speak all responses">🔄 Auto</button>
             <button class="settings-btn" onclick="openCredentials()">⚙ Settings</button>
             <div class="status-dot"></div>
@@ -645,6 +646,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <p>Loading...</p>
             </div>
             <button class="close-modal" onclick="closeTools()">Close</button>
+        </div>
+    </div>
+    
+
+    <div class="credentials-panel" id="customUrlPanel">
+        <div class="credentials-modal">
+            <h2>Custom Provider URL</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.875rem;">
+                Enter any OpenAI-compatible API endpoint URL.
+            </p>
+            <div class="credential-input">
+                <input type="text" id="customBaseUrl" placeholder="https://api.example.com/v1" style="flex: 1;">
+            </div>
+            <div class="credential-input">
+                <input type="text" id="customModel" placeholder="Model name (e.g., gpt-4o)" style="flex: 1;">
+            </div>
+            <div class="credential-input">
+                <input type="password" id="customApiKey" placeholder="API key (optional)" style="flex: 1;">
+            </div>
+            <button onclick="saveCustomUrl()" style="background: var(--accent-cyan); border: none; border-radius: 6px; padding: 0.5rem 1rem; color: white; cursor: pointer; margin-top: 0.5rem;">Save</button>
+            <button class="close-modal" onclick="closeCustomUrl()">Close</button>
         </div>
     </div>
     
@@ -921,6 +943,57 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         // Initial check
         setTimeout(checkUpdate, 2000);
         
+
+        function openCustomUrl() {
+            document.getElementById('customUrlPanel').classList.add('active');
+            loadCustomUrl();
+        }
+        
+        function closeCustomUrl() {
+            document.getElementById('customUrlPanel').classList.remove('active');
+        }
+        
+        async function loadCustomUrl() {
+            try {
+                const resp = await fetch('/api/providers');
+                const data = await resp.json();
+                // Pre-fill if we have saved values
+                const baseUrl = document.getElementById('customBaseUrl');
+                const model = document.getElementById('customModel');
+                const apiKey = document.getElementById('customApiKey');
+                if (baseUrl && !baseUrl.value) baseUrl.value = '';
+                if (model && !model.value) model.value = 'default';
+            } catch (e) {}
+        }
+        
+        async function saveCustomUrl() {
+            const baseUrl = document.getElementById('customBaseUrl').value.trim();
+            const model = document.getElementById('customModel').value.trim() || 'default';
+            const apiKey = document.getElementById('customApiKey').value.trim();
+            
+            if (!baseUrl) {
+                alert('Please enter a URL');
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/api/custom-provider', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_url: baseUrl, model: model, api_key: apiKey })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    closeCustomUrl();
+                    addMessage('Custom provider saved!', 'system');
+                } else {
+                    alert(data.error || 'Failed to save');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+        
         function openCredentials() {
             document.getElementById('credentialsPanel').classList.add('active');
             loadCredentials();
@@ -1077,7 +1150,7 @@ async def websocket_endpoint(websocket: WebSocket):
             message = json.loads(data)
 
             user_message = message.get("message", "").strip()
-            provider_name = message.get("provider", "ollama")
+            provider_name = message.get("provider", "custom")
             if not user_message:
                 continue
 
@@ -1285,6 +1358,39 @@ async def trigger_update():
         return {"success": False, "message": "Update timed out after 5 minutes"}
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+
+@app.post("/api/custom-provider")
+async def save_custom_provider(request: Request):
+    """Save custom provider configuration."""
+    data = await request.json()
+    base_url = data.get("base_url", "").strip()
+    model = data.get("model", "default").strip()
+    api_key = data.get("api_key", "").strip()
+    
+    if not base_url:
+        return {"success": False, "error": "URL is required"}
+    
+    # Save to config
+    import yaml
+    config_path = SARA_ROOT / "config.yaml"
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+    except Exception:
+        config = {}
+    
+    config.setdefault("providers", {})["custom"] = {
+        "base_url": base_url,
+        "model": model,
+        "api_key": api_key,
+    }
+    
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+    
+    return {"success": True, "message": "Custom provider saved"}
 
 
 @app.get("/api/health")

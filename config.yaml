@@ -1,15 +1,11 @@
 # S.A.R.A Agent Configuration
 
-# Active provider (ollama, openai, gemini, copilot, anthropic, openrouter)
+# Active provider (custom, openai, gemini, copilot, anthropic, openrouter, groq, mistral, deepseek, xai, together, fireworks, perplexity, opencodezen, kimi, minimax, zai, nous)
 provider:
-  active: "ollama"
+  active: "custom"
 
 # Provider configurations
 providers:
-  ollama:
-    base_url: "http://192.168.2.176:11434"
-    model: "S.A.R.A-v3c:latest"
-
   openai:
     api_key: ""  # Set via OPENAI_API_KEY env var
     model: "gpt-4o"
@@ -94,6 +90,11 @@ providers:
     api_key: ""  # Set via NOUS_API_KEY env var
     model: "Hermes-3-Llama-3.1-8B"
     base_url: "https://inference-api.nousresearch.com/v1"
+
+  custom:
+    api_key: ""  # Optional API key
+    model: "default"  # Model name
+    base_url: ""  # Custom OpenAI-compatible URL
 
 # Model settings
 model:
