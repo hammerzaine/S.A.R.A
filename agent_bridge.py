@@ -1379,6 +1379,10 @@ class SaraAgent:
 
         return provider.chat(message, stream_callback)
 
+    def is_ready(self) -> bool:
+        """Check if the agent is initialized and ready."""
+        return self._active_provider is not None
+
     def get_status(self) -> Dict[str, Any]:
         """Get status of all providers."""
         status = {
