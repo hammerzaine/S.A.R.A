@@ -244,6 +244,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             color: var(--text-secondary);
         }
         
+
+        .model-selector {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .model-selector select {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            cursor: pointer;
+            max-width: 200px;
+        }
+        
+        .model-selector select:focus {
+            border-color: var(--accent-cyan);
+        }
+        
         .provider-selector {
             display: flex;
             align-items: center;
@@ -617,6 +639,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <option value="zai">Z.AI / GLM</option>
                     <option value="nous">Nous Research (Hermes)</option>
                 </select>
+                <select id="modelSelect" onchange="switchModel()" title="Select model">
+                    <option value="">Loading...</option>
+                </select>
             </div>
             <button class="settings-btn" onclick="showSkills()">📚 Skills</button>
             <button class="settings-btn" onclick="showTools()">🔧 Tools</button>
@@ -849,7 +874,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             typing.classList.add('active');
             sendBtn.disabled = true;
             
-            ws.send(JSON.stringify({ message: text, provider: document.getElementById('providerSelect').value }));
+            ws.send(JSON.stringify({ message: text, provider: document.getElementById('providerSelect').value, model: document.getElementById('modelSelect')?.value || '' }));
         }
         
         function switchProvider() {
@@ -1099,6 +1124,165 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
         
+
+        // Model management
+        const providerModels = {
+            openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini"],
+            gemini: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+            copilot: ["gpt-4o", "claude-sonnet-4"],
+            anthropic: ["claude-sonnet-4", "claude-opus-4", "claude-3-5-sonnet"],
+            openrouter: ["openai/gpt-4o", "anthropic/claude-sonnet-4", "google/gemini-2.0-flash", "meta-llama/llama-3.3-70b"],
+            groq: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"],
+            mistral: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
+            deepseek: ["deepseek-chat", "deepseek-coder"],
+            xai: ["grok-2-latest", "grok-2-1212", "grok-beta"],
+            together: ["meta-llama/Llama-3.3-70B-Instruct-Turbo", "mistralai/Mixtral-8x7B-Instruct-v0.1"],
+            fireworks: ["accounts/fireworks/models/llama-v3p3-70b-instruct", "accounts/fireworks/models/mixtral-8x7b-instruct"],
+            perplexity: ["sonar", "sonar-pro", "sonar-reasoning"],
+            opencodezen: ["opencode-zen"],
+            kimi: ["moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"],
+            minimax: ["MiniMax-M1", "MiniMax-M1-40k"],
+            zai: ["glm-4-plus", "glm-4-air", "glm-4-flash"],
+            nous: ["Hermes-3-Llama-3.1-8B", "Hermes-3-Llama-3.1-70B"],
+            custom: []
+        };
+        
+        async function loadModelsForProvider(provider) {
+            const modelSelect = document.getElementById('modelSelect');
+            if (!modelSelect) return;
+            
+            let models = [];
+            
+            if (provider === 'custom') {
+                // Load models from custom providers
+                try {
+                    const resp = await fetch('/api/custom-providers');
+                    const data = await resp.json();
+                    if (data.providers && data.providers.length > 0) {
+                        // Use first custom provider's models
+                        const custom = data.providers[0];
+                        const modelsResp = await fetch('/api/fetch-models', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ base_url: custom.base_url, api_key: custom.api_key || '' })
+                        });
+                        const modelsData = await modelsResp.json();
+                        models = modelsData.models || [];
+                    }
+                } catch (e) {
+                    console.error('Failed to load custom models:', e);
+                }
+            } else {
+                models = providerModels[provider] || [];
+            }
+            
+            // Update dropdown
+            modelSelect.innerHTML = '';
+            if (models.length === 0) {
+                modelSelect.innerHTML = '<option value="">Default model</option>';
+            } else {
+                for (const model of models) {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                }
+            }
+        }
+        
+        function switchModel() {
+            const provider = document.getElementById('providerSelect').value;
+            const model = document.getElementById('modelSelect').value;
+            if (model) {
+                addMessage(`Switched to ${model} on ${provider}`, 'system');
+            }
+        }
+        
+        // Update loadModelsForProvider to be called when provider changes
+        const originalSwitchProvider = switchProvider;
+        switchProvider = function() {
+            const provider = document.getElementById('providerSelect').value;
+            addMessage('Switched to ' + provider, 'system');
+            loadModelsForProvider(provider);
+        };
+        
+        // Load models for default provider on startup
+        setTimeout(() => {
+            const provider = document.getElementById('providerSelect').value;
+            loadModelsForProvider(provider);
+        }, 1000);
+        
+        // Custom provider model fetching in settings
+        async function fetchCustomModels() {
+            const urlInput = document.getElementById('customUrl');
+            if (!urlInput || !urlInput.value.trim()) return;
+            
+            const url = urlInput.value.trim();
+            const apiKey = document.getElementById('customKey')?.value.trim() || '';
+            const modelInput = document.getElementById('customModelName');
+            
+            if (modelInput) {
+                modelInput.placeholder = 'Fetching models...';
+                modelInput.disabled = true;
+            }
+            
+            try {
+                const resp = await fetch('/api/fetch-models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_url: url, api_key: apiKey })
+                });
+                const data = await resp.json();
+                
+                if (data.success && data.models.length > 0) {
+                    if (modelInput) {
+                        modelInput.placeholder = data.models.join(', ');
+                        modelInput.disabled = false;
+                    }
+                    // Show success message
+                    const list = document.getElementById('customProviderList');
+                    if (list) {
+                        const msg = document.createElement('p');
+                        msg.style.color = 'var(--accent-green)';
+                        msg.style.fontSize = '0.75rem';
+                        msg.textContent = `✓ Connected! Found ${data.models.length} models.`;
+                        list.insertBefore(msg, list.firstChild);
+                        setTimeout(() => msg.remove(), 5000);
+                    }
+                } else {
+                    if (modelInput) {
+                        modelInput.placeholder = 'Enter model name manually';
+                        modelInput.disabled = false;
+                    }
+                    const list = document.getElementById('customProviderList');
+                    if (list) {
+                        const msg = document.createElement('p');
+                        msg.style.color = 'var(--accent-red)';
+                        msg.style.fontSize = '0.75rem';
+                        msg.textContent = data.error || 'Connection failed';
+                        list.insertBefore(msg, list.firstChild);
+                        setTimeout(() => msg.remove(), 5000);
+                    }
+                }
+            } catch (e) {
+                if (modelInput) {
+                    modelInput.placeholder = 'Enter model name manually';
+                    modelInput.disabled = false;
+                }
+            }
+        }
+        
+        // Add event listener for custom URL input
+        document.addEventListener('DOMContentLoaded', () => {
+            const customUrl = document.getElementById('customUrl');
+            if (customUrl) {
+                customUrl.addEventListener('blur', fetchCustomModels);
+                customUrl.addEventListener('keyup', (e) => {
+                    if (e.key === 'Enter') fetchCustomModels();
+                });
+            }
+        });
+        
         function openCredentials() {
             document.getElementById('credentialsPanel').classList.add('active');
             loadCredentials();
@@ -1280,9 +1464,12 @@ async def websocket_endpoint(websocket: WebSocket):
             if not user_message:
                 continue
 
+            # Get selected model
+            model = message.get("model", "")
+            
             # Switch provider if requested
             if provider_name != agent._active_provider:
-                if not agent.set_provider(provider_name):
+                if not agent.set_provider(provider_name, model if model else None):
                     await websocket.send_json({
                         "type": "error",
                         "message": f"Failed to switch to provider: {provider_name}"
@@ -1299,7 +1486,7 @@ async def websocket_endpoint(websocket: WebSocket):
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: agent.chat(user_message)
+                lambda: agent.chat(user_message, model=model if model else None)
             )
 
             # Send the response
@@ -1568,6 +1755,44 @@ async def delete_custom_provider(provider_id: str):
             _save_custom_providers()
             return {"success": True}
     return {"success": False, "error": "Provider not found"}
+
+
+
+@app.post("/api/fetch-models")
+async def fetch_models(request: Request):
+    """Fetch available models from a custom URL."""
+    data = await request.json()
+    base_url = data.get("base_url", "").strip()
+    api_key = data.get("api_key", "").strip()
+    
+    if not base_url:
+        return {"error": "URL is required", "models": []}
+    
+    try:
+        import requests
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        
+        # Try OpenAI-compatible /models endpoint
+        resp = requests.get(f"{base_url}/models", headers=headers, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m["id"] for m in data.get("data", []) if "id" in m]
+            return {"success": True, "models": models}
+        
+        # Try Ollama /api/tags endpoint
+        resp = requests.get(f"{base_url}/api/tags", headers=headers, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m["name"] for m in data.get("models", []) if "name" in m]
+            return {"success": True, "models": models}
+        
+        return {"error": f"Connection failed (status {resp.status_code})", "models": []}
+    except requests.exceptions.Timeout:
+        return {"error": "Connection timed out", "models": []}
+    except Exception as e:
+        return {"error": str(e), "models": []}
 
 
 @app.get("/api/health")

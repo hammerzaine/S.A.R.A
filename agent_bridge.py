@@ -1376,14 +1376,16 @@ class SaraAgent:
 
             return False
 
-    def set_provider(self, provider_name: str) -> bool:
+    def set_provider(self, provider_name: str, model: Optional[str] = None) -> bool:
         """Switch to a different provider."""
         if provider_name in self._providers:
             self._active_provider = provider_name
+            if model:
+                self._providers[provider_name]._model = model
             return True
         return self.initialize(provider_name)
 
-    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+    def chat(self, message: str, stream_callback: Optional[Callable[[str], None]] = None, model: Optional[str] = None) -> str:
         """Send a message through the active provider."""
         if self._active_provider is None:
             if not self.initialize():
@@ -1392,6 +1394,9 @@ class SaraAgent:
         provider = self._providers.get(self._active_provider)
         if provider is None:
             return "Error: Provider not initialized"
+
+        if model:
+            provider._model = model
 
         return provider.chat(message, stream_callback)
 
