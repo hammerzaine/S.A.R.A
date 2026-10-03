@@ -150,6 +150,32 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: #dc2626;
         }
         
+
+        .voice-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+        
+        .voice-btn:hover {
+            border-color: var(--accent-green);
+            color: var(--accent-green);
+        }
+        
+        .voice-btn.active {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+            color: white;
+        }
+        
+        .voice-btn.speaking {
+            animation: pulse 1s infinite;
+        }
+        
         .header {
             background: var(--bg-secondary);
             border-bottom: 1px solid var(--border-color);
@@ -565,6 +591,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
             <button class="settings-btn" onclick="showSkills()">📚 Skills</button>
             <button class="settings-btn" onclick="showTools()">🔧 Tools</button>
+                        <button class="voice-btn" id="speakBtn" onclick="toggleSpeak()" title="Speak responses aloud">🔊 Speak</button>
+            <button class="voice-btn" id="autoSpeakBtn" onclick="toggleAutoSpeak()" title="Auto-speak all responses">🔄 Auto</button>
             <button class="settings-btn" onclick="openCredentials()">⚙ Settings</button>
             <div class="status-dot"></div>
             <span>Online</span>
@@ -666,6 +694,77 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             };
         }
         
+
+        // Voice synthesis using Web Speech API
+        let speakEnabled = false;
+        let autoSpeakEnabled = false;
+        let currentUtterance = null;
+        
+        function toggleSpeak() {
+            speakEnabled = !speakEnabled;
+            const btn = document.getElementById('speakBtn');
+            btn.classList.toggle('active', speakEnabled);
+            if (!speakEnabled && window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+        }
+        
+        function toggleAutoSpeak() {
+            autoSpeakEnabled = !autoSpeakEnabled;
+            const btn = document.getElementById('autoSpeakBtn');
+            btn.classList.toggle('active', autoSpeakEnabled);
+            if (!autoSpeakEnabled && window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+        }
+        
+        function speakText(text) {
+            if (!speakEnabled && !autoSpeakEnabled) return;
+            if (!window.speechSynthesis) {
+                console.log('Speech synthesis not supported');
+                return;
+            }
+            
+            // Cancel any ongoing speech
+            window.speechSynthesis.cancel();
+            
+            // Create utterance
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            utterance.volume = 1.0;
+            
+            // Try to find a good voice
+            const voices = window.speechSynthesis.getVoices();
+            const preferredVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Samantha') || v.name.includes('Microsoft Zira'));
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+            }
+            
+            // Update button state
+            const btn = document.getElementById('speakBtn');
+            btn.classList.add('speaking');
+            
+            utterance.onend = () => {
+                btn.classList.remove('speaking');
+            };
+            
+            utterance.onerror = () => {
+                btn.classList.remove('speaking');
+            };
+            
+            currentUtterance = utterance;
+            window.speechSynthesis.speak(utterance);
+        }
+        
+        // Load voices (some browsers load them asynchronously)
+        if (window.speechSynthesis) {
+            window.speechSynthesis.getVoices();
+            window.speechSynthesis.onvoiceschanged = () => {
+                window.speechSynthesis.getVoices();
+            };
+        }
+        
         function addMessage(text, sender) {
             const welcome = chat.querySelector('.welcome');
             if (welcome) welcome.remove();
@@ -675,6 +774,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             
             if (sender === 'assistant') {
                 div.innerHTML = `<div class="sender">S.A.R.A</div>${escapeHtml(text)}`;
+                speakText(text);
             } else {
                 div.textContent = text;
             }
