@@ -79,6 +79,35 @@ update_thread = threading.Thread(target=update_checker_loop, daemon=True)
 update_thread.start()
 
 
+
+# Custom providers storage
+_custom_providers: Dict[str, Dict[str, Any]] = {}
+_custom_providers_lock = threading.Lock()
+
+def _load_custom_providers():
+    """Load custom providers from file."""
+    global _custom_providers
+    try:
+        providers_file = SARA_ROOT / "custom_providers.json"
+        if providers_file.exists():
+            with open(providers_file) as f:
+                _custom_providers = json.load(f)
+    except Exception:
+        _custom_providers = {}
+
+def _save_custom_providers():
+    """Save custom providers to file."""
+    try:
+        providers_file = SARA_ROOT / "custom_providers.json"
+        with open(providers_file, "w") as f:
+            json.dump(_custom_providers, f, indent=2)
+    except Exception:
+        pass
+
+# Load custom providers on startup
+_load_custom_providers()
+
+
 app = FastAPI(title="S.A.R.A Agent", version="1.0.0")
 
 # Add CORS middleware
@@ -994,6 +1023,82 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
         
+
+        async function loadCustomProviders() {
+            const list = document.getElementById('customProviderList');
+            if (!list) return;
+            try {
+                const resp = await fetch('/api/custom-providers');
+                const data = await resp.json();
+                
+                let html = '';
+                for (const provider of data.providers || []) {
+                    html += '<div class="credential-item">';
+                    html += `<span class="label">${provider.name}</span>`;
+                    html += `<span style="color: var(--text-secondary); font-size: 0.75rem;">${provider.base_url}</span>`;
+                    html += `<button onclick="deleteCustomProvider('${provider.id}')">Remove</button>`;
+                    html += '</div>';
+                }
+                list.innerHTML = html || '<p style="color: var(--text-secondary); font-size: 0.75rem;">No custom providers added.</p>';
+            } catch (e) {
+                list.innerHTML = '<p style="color: var(--accent-red); font-size: 0.75rem;">Error loading custom providers.</p>';
+            }
+        }
+        
+        async function saveCustomProvider() {
+            const name = document.getElementById('customName').value.trim();
+            const baseUrl = document.getElementById('customUrl').value.trim();
+            const model = document.getElementById('customModelName').value.trim() || 'default';
+            const apiKey = document.getElementById('customKey').value.trim();
+            
+            if (!name) {
+                alert('Please enter a name');
+                return;
+            }
+            if (!baseUrl) {
+                alert('Please enter a URL');
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/api/custom-providers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, base_url: baseUrl, model, api_key: apiKey })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    document.getElementById('customName').value = '';
+                    document.getElementById('customUrl').value = '';
+                    document.getElementById('customModelName').value = '';
+                    document.getElementById('customKey').value = '';
+                    loadCustomProviders();
+                } else {
+                    alert(data.error || 'Failed to save');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+        
+        async function deleteCustomProvider(id) {
+            if (!confirm('Remove this custom provider?')) return;
+            
+            try {
+                const resp = await fetch(`/api/custom-providers/${id}`, {
+                    method: 'DELETE'
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    loadCustomProviders();
+                } else {
+                    alert(data.error || 'Failed to remove');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+        
         function openCredentials() {
             document.getElementById('credentialsPanel').classList.add('active');
             loadCredentials();
@@ -1048,7 +1153,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     html += `</div></div>`;
                 }
                 
+                // Add custom provider section
+                html += '<div class="credential-section">';
+                html += '<h3>Other (Custom URL)</h3>';
+                html += '<p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 0.5rem;">Add a custom OpenAI-compatible API endpoint</p>';
+                html += '<div class="credential-input">';
+                html += '<input type="text" id="customName" placeholder="Name (e.g., My Ollama)" style="flex: 1;">';
+                html += '</div>';
+                html += '<div class="credential-input">';
+                html += '<input type="text" id="customUrl" placeholder="URL (e.g., http://192.168.2.176:11434/v1)" style="flex: 1;">';
+                html += '</div>';
+                html += '<div class="credential-input">';
+                html += '<input type="text" id="customModelName" placeholder="Model name (e.g., S.A.R.A-v3c:latest)" style="flex: 1;">';
+                html += '</div>';
+                html += '<div class="credential-input">';
+                html += '<input type="password" id="customKey" placeholder="API key (optional)" style="flex: 1;">';
+                html += '<button onclick="saveCustomProvider()">Save</button>';
+                html += '</div>';
+                html += '<div id="customProviderList"></div>';
+                html += '</div>';
+                
                 content.innerHTML = html || '<p>No providers available.</p>';
+                loadCustomProviders();
             } catch (e) {
                 content.innerHTML = `<p>Error loading credentials: ${e.message}</p>`;
             }
@@ -1391,6 +1517,57 @@ async def save_custom_provider(request: Request):
         yaml.dump(config, f, default_flow_style=False)
     
     return {"success": True, "message": "Custom provider saved"}
+
+
+
+@app.get("/api/custom-providers")
+async def get_custom_providers():
+    """Get all custom providers."""
+    return {
+        "providers": [
+            {"id": k, "name": v.get("name", ""), "base_url": v.get("base_url", ""), "model": v.get("model", "")}
+            for k, v in _custom_providers.items()
+        ]
+    }
+
+
+@app.post("/api/custom-providers")
+async def add_custom_provider(request: Request):
+    """Add a custom provider."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    base_url = data.get("base_url", "").strip()
+    model = data.get("model", "default").strip()
+    api_key = data.get("api_key", "").strip()
+    
+    if not name:
+        return {"success": False, "error": "Name is required"}
+    if not base_url:
+        return {"success": False, "error": "URL is required"}
+    
+    provider_id = f"custom_{int(time.time() * 1000)}"
+    
+    with _custom_providers_lock:
+        _custom_providers[provider_id] = {
+            "name": name,
+            "base_url": base_url,
+            "model": model,
+            "api_key": api_key,
+        }
+        _save_custom_providers()
+    
+    return {"success": True, "id": provider_id, "name": name}
+
+
+@app.delete("/api/custom-providers/{provider_id}")
+async def delete_custom_provider(provider_id: str):
+    """Remove a custom provider."""
+    with _custom_providers_lock:
+        if provider_id in _custom_providers:
+            del _custom_providers[provider_id]
+            _save_custom_providers()
+            return {"success": True}
+    return {"success": False, "error": "Provider not found"}
 
 
 @app.get("/api/health")
