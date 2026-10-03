@@ -21,6 +21,64 @@ from fastapi.middleware.cors import CORSMiddleware
 # Add the parent directory to the path so we can import hermes modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+
+# Update checker
+import subprocess
+import time
+import threading
+
+_update_available = False
+_update_info = ""
+_update_check_interval = 120  # 2 minutes
+
+def check_for_updates():
+    """Check if a new version is available on the remote."""
+    global _update_available, _update_info
+    try:
+        # Fetch latest from remote
+        subprocess.run(
+            ["git", "fetch", "origin"],
+            capture_output=True,
+            timeout=30,
+            cwd=SARA_ROOT
+        )
+        
+        # Compare local and remote
+        local = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=SARA_ROOT
+        ).stdout.strip()
+        
+        remote = subprocess.run(
+            ["git", "rev-parse", "origin/master"],
+            capture_output=True,
+            text=True,
+            cwd=SARA_ROOT
+        ).stdout.strip()
+        
+        if local != remote:
+            _update_available = True
+            _update_info = "New version available!"
+        else:
+            _update_available = False
+            _update_info = ""
+    except Exception as e:
+        _update_available = False
+        _update_info = ""
+
+def update_checker_loop():
+    """Background thread that checks for updates periodically."""
+    while True:
+        check_for_updates()
+        time.sleep(_update_check_interval)
+
+# Start the update checker thread
+update_thread = threading.Thread(target=update_checker_loop, daemon=True)
+update_thread.start()
+
+
 app = FastAPI(title="S.A.R.A Agent", version="1.0.0")
 
 # Add CORS middleware
@@ -69,6 +127,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             height: 100vh;
             display: flex;
             flex-direction: column;
+        }
+        
+
+        .update-banner {
+            display: none;
+            background: var(--accent-red);
+            color: white;
+            padding: 0.5rem 1rem;
+            text-align: center;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            animation: pulse 2s infinite;
+        }
+        
+        .update-banner.active {
+            display: block;
+        }
+        
+        .update-banner:hover {
+            background: #dc2626;
         }
         
         .header {
@@ -448,6 +527,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </style>
 </head>
 <body>
+    <div class="update-banner" id="updateBanner" onclick="checkUpdate()">
+        <span id="updateMessage">New version available!</span>
+    </div>
+    
     <div class="header">
         <div class="logo">
             <div class="logo-icon">S</div>
@@ -686,6 +769,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 content.innerHTML = `<p>Error loading tools: ${e.message}</p>`;
             }
         }
+        
+
+        function checkUpdate() {
+            fetch('/api/update-status')
+                .then(r => r.json())
+                .then(data => {
+                    const banner = document.getElementById('updateBanner');
+                    const message = document.getElementById('updateMessage');
+                    if (data.update_available) {
+                        banner.classList.add('active');
+                        message.textContent = data.message || 'New version available!';
+                    } else {
+                        banner.classList.remove('active');
+                    }
+                })
+                .catch(() => {});
+        }
+        
+        // Check for updates every 2 minutes
+        setInterval(checkUpdate, 120000);
+        // Initial check
+        setTimeout(checkUpdate, 2000);
         
         function openCredentials() {
             document.getElementById('credentialsPanel').classList.add('active');
@@ -1006,6 +1111,16 @@ async def get_tools():
         }
     except Exception as e:
         return {"error": str(e), "count": 0, "tools": []}
+
+
+@app.get("/api/update-status")
+async def get_update_status():
+    """Check if an update is available."""
+    return {
+        "update_available": _update_available,
+        "message": _update_info,
+        "check_interval": _update_check_interval
+    }
 
 
 @app.get("/api/health")
