@@ -527,8 +527,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <div class="update-banner" id="updateBanner" onclick="checkUpdate()">
+    <div class="update-banner" id="updateBanner">
         <span id="updateMessage">New version available!</span>
+        <button onclick="triggerUpdate(event)" style="background: white; color: var(--accent-red); border: none; border-radius: 4px; padding: 0.25rem 0.75rem; margin-left: 0.75rem; font-weight: 700; cursor: pointer;">Update Now</button>
     </div>
     
     <div class="header">
@@ -771,6 +772,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         
 
+
+        function triggerUpdate(event) {
+            event.stopPropagation();
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+            
+            fetch('/api/update', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        btn.textContent = 'Updated!';
+                        document.getElementById('updateMessage').textContent = 'Update successful! Restarting...';
+                        // Reload page after 3 seconds
+                        setTimeout(() => location.reload(), 3000);
+                    } else {
+                        btn.textContent = 'Failed';
+                        document.getElementById('updateMessage').textContent = data.message || 'Update failed';
+                        setTimeout(() => { btn.disabled = false; btn.textContent = 'Update Now'; }, 3000);
+                    }
+                })
+                .catch(e => {
+                    btn.textContent = 'Error';
+                    document.getElementById('updateMessage').textContent = 'Error: ' + e.message;
+                    setTimeout(() => { btn.disabled = false; btn.textContent = 'Update Now'; }, 3000);
+                });
+        }
+        
         function checkUpdate() {
             fetch('/api/update-status')
                 .then(r => r.json())
@@ -1121,6 +1150,41 @@ async def get_update_status():
         "message": _update_info,
         "check_interval": _update_check_interval
     }
+
+
+
+@app.post("/api/update")
+async def trigger_update():
+    """Trigger an update from the web UI."""
+    import subprocess
+    import sys
+    
+    try:
+        # Run the upgrade script
+        result = subprocess.run(
+            [sys.executable, str(SARA_ROOT / "sara_upgrade.py"), "upgrade", "origin", "master"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(SARA_ROOT)
+        )
+        
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "message": "Update successful! Restarting...",
+                "output": result.stdout[-500:] if result.stdout else ""
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Update failed",
+                "output": result.stderr[-500:] if result.stderr else result.stdout[-500:] if result.stdout else "Unknown error"
+            }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "message": "Update timed out after 5 minutes"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
 @app.get("/api/health")
