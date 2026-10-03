@@ -1328,6 +1328,7 @@ class SaraAgent:
         self._active_provider: Optional[str] = None
         self._lock = threading.Lock()
         self._config: Dict[str, Any] = {}
+        self._init_error: Optional[str] = None
 
     def load_config(self) -> Dict[str, Any]:
         """Load provider configuration from config.yaml."""
