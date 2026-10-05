@@ -47,6 +47,28 @@ class BaseProvider:
         """Send a message and return the response."""
         raise NotImplementedError
 
+    def chat_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Send a list of messages with optional tools.
+
+        Returns a dict with:
+            - content: str (the text response)
+            - tool_calls: list of {name, arguments} (if any)
+        """
+        # Default implementation: just send the last user message
+        # Subclasses should override this for proper tool support
+        last_user_msg = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_msg = msg.get("content", "")
+                break
+        response = self.chat(last_user_msg, stream_callback=stream_callback)
+        return {"content": response, "tool_calls": []}
+
     def is_ready(self) -> bool:
         return self._initialized
 
@@ -126,13 +148,94 @@ class OpenAIProvider(BaseProvider):
             return f"Error: {str(e)}"
 
 
+    def chat_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Send messages with tool-calling support via OpenAI API."""
+        if not self._initialized:
+            if not self.initialize():
+                return {"content": f"Error: {self._init_error}", "tool_calls": []}
+        try:
+            payload: Dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+            }
+            if tools:
+                payload["tools"] = tools
+
+            if stream_callback:
+                payload["stream"] = True
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                tool_calls = []
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                            if "tool_calls" in delta:
+                                for tc in delta["tool_calls"]:
+                                    idx = tc.get("index", 0)
+                                    while len(tool_calls) <= idx:
+                                        tool_calls.append({"name": "", "arguments": ""})
+                                    if tc.get("function", {}).get("name"):
+                                        tool_calls[idx]["name"] = tc["function"]["name"]
+                                    if tc.get("function", {}).get("arguments"):
+                                        tool_calls[idx]["arguments"] += tc["function"]["arguments"]
+                # Parse accumulated tool calls
+                parsed_calls = []
+                for tc in tool_calls:
+                    if tc["name"]:
+                        try:
+                            args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                        except json.JSONDecodeError:
+                            args = {}
+                        parsed_calls.append({"name": tc["name"], "arguments": args})
+                return {"content": full_response, "tool_calls": parsed_calls}
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return {"content": f"Error: OpenAI API returned status {response.status_code}", "tool_calls": []}
+                data = response.json()
+                msg = data["choices"][0]["message"]
+                content = msg.get("content", "") or ""
+                tool_calls = []
+                if "tool_calls" in msg:
+                    for tc in msg["tool_calls"]:
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except (json.JSONDecodeError, KeyError):
+                            args = {}
+                        tool_calls.append({"name": tc["function"]["name"], "arguments": args})
+                return {"content": content, "tool_calls": tool_calls}
+        except Exception as e:
+            return {"content": f"Error: {str(e)}", "tool_calls": []}
+
+
 class GeminiProvider(BaseProvider):
     """Google Gemini provider."""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__("gemini", config)
         self._api_key = config.get("api_key", os.environ.get("GEMINI_API_KEY", ""))
-        self._model = config.get("model", "gemini-2.0-flash")
+        self._model = config.get("model", "gemini-3.8-flash")
         self._base_url = config.get("base_url", "https://generativelanguage.googleapis.com/v1beta")
 
     def _get_endpoint(self) -> str:
@@ -205,6 +308,102 @@ class GeminiProvider(BaseProvider):
                 return data["candidates"][0]["content"]["parts"][0]["text"]
         except Exception as e:
             return f"Error: {str(e)}"
+
+
+    def chat_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Send messages with tool-calling support via Gemini API."""
+        if not self._initialized:
+            if not self.initialize():
+                return {"content": f"Error: {self._init_error}", "tool_calls": []}
+        try:
+            # Convert OpenAI-format messages to Gemini format
+            contents = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                if role == "system":
+                    continue  # Skip system messages for Gemini
+                content = msg.get("content", "")
+                if role == "assistant":
+                    contents.append({"role": "model", "parts": [{"text": content}]})
+                else:
+                    contents.append({"role": role, "parts": [{"text": content}]})
+
+            payload: Dict[str, Any] = {"contents": contents}
+
+            if tools:
+                # Convert OpenAI tool format to Gemini function declarations
+                function_declarations = []
+                for tool in tools:
+                    func = tool.get("function", {})
+                    function_declarations.append({
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {"type": "object", "properties": {}})
+                    })
+                payload["tools"] = [{"function_declarations": function_declarations}]
+
+            url = self._get_endpoint()
+            if stream_callback:
+                url += "&alt=sse"
+                response = requests.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "candidates" in data and data["candidates"]:
+                            content = data["candidates"][0].get("content", {})
+                            parts = content.get("parts", [])
+                            for part in parts:
+                                text = part.get("text", "")
+                                if text:
+                                    full_response += text
+                                    stream_callback(text)
+                return {"content": full_response, "tool_calls": []}
+            else:
+                response = requests.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    error_detail = ""
+                    try:
+                        error_data = response.json()
+                        error_detail = f" - {error_data.get('error', {}).get('message', '')}"
+                    except Exception:
+                        pass
+                    return {"content": f"Error: Gemini API returned status {response.status_code}{error_detail}", "tool_calls": []}
+                data = response.json()
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    return {"content": "Error: No response from Gemini", "tool_calls": []}
+                content = candidates[0].get("content", {})
+                parts = content.get("parts", [])
+                full_response = ""
+                tool_calls = []
+                for part in parts:
+                    if "text" in part:
+                        full_response += part["text"]
+                    if "functionCall" in part:
+                        fc = part["functionCall"]
+                        tool_calls.append({
+                            "name": fc.get("name", ""),
+                            "arguments": fc.get("args", {})
+                        })
+                return {"content": full_response, "tool_calls": tool_calls}
+        except Exception as e:
+            return {"content": f"Error: {str(e)}", "tool_calls": []}
 
 
 class CopilotProvider(BaseProvider):
@@ -1166,7 +1365,7 @@ class NousResearchProvider(BaseProvider):
     def __init__(self, config: Dict[str, Any]):
         super().__init__("nous", config)
         self._api_key = config.get("api_key", os.environ.get("NOUS_API_KEY", ""))
-        self._model = config.get("model", "Hermes-3-Llama-3.1-8B")
+        self._model = config.get("model", "meituan/longcat-2.5-preview:free")
         self._base_url = config.get("base_url", "https://inference-api.nousresearch.com/v1")
 
     def initialize(self) -> bool:
@@ -1227,6 +1426,86 @@ class NousResearchProvider(BaseProvider):
         except Exception as e:
             return f"Error: {str(e)}"
 
+
+
+    def chat_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Send messages with tool-calling support via Nous Research API."""
+        if not self._initialized:
+            if not self.initialize():
+                return {"content": f"Error: {self._init_error}", "tool_calls": []}
+        try:
+            payload: Dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+            }
+            if tools:
+                payload["tools"] = tools
+
+            if stream_callback:
+                payload["stream"] = True
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                    stream=True, timeout=120,
+                )
+                full_response = ""
+                tool_calls = []
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                stream_callback(content)
+                            if "tool_calls" in delta:
+                                for tc in delta["tool_calls"]:
+                                    idx = tc.get("index", 0)
+                                    while len(tool_calls) <= idx:
+                                        tool_calls.append({"name": "", "arguments": ""})
+                                    if tc.get("function", {}).get("name"):
+                                        tool_calls[idx]["name"] = tc["function"]["name"]
+                                    if tc.get("function", {}).get("arguments"):
+                                        tool_calls[idx]["arguments"] += tc["function"]["arguments"]
+                parsed_calls = []
+                for tc in tool_calls:
+                    if tc["name"]:
+                        try:
+                            args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                        except json.JSONDecodeError:
+                            args = {}
+                        parsed_calls.append({"name": tc["name"], "arguments": args})
+                return {"content": full_response, "tool_calls": parsed_calls}
+            else:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=120,
+                )
+                if response.status_code != 200:
+                    return {"content": f"Error: Nous API returned status {response.status_code}", "tool_calls": []}
+                data = response.json()
+                msg = data["choices"][0]["message"]
+                content = msg.get("content", "") or ""
+                tool_calls = []
+                if "tool_calls" in msg:
+                    for tc in msg["tool_calls"]:
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except (json.JSONDecodeError, KeyError):
+                            args = {}
+                        tool_calls.append({"name": tc["function"]["name"], "arguments": args})
+                return {"content": content, "tool_calls": tool_calls}
+        except Exception as e:
+            return {"content": f"Error: {str(e)}", "tool_calls": []}
 
 
 class CustomProvider(BaseProvider):
@@ -1442,6 +1721,23 @@ class SaraAgent:
             provider._model = model
 
         return provider.chat(message, stream_callback)
+
+    def chat_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Send messages with tool-calling support through the active provider."""
+        if self._active_provider is None:
+            if not self.initialize():
+                return {"content": "Error: No provider available", "tool_calls": []}
+
+        provider = self._providers.get(self._active_provider)
+        if provider is None:
+            return {"content": "Error: Provider not initialized", "tool_calls": []}
+
+        return provider.chat_with_messages(messages, tools=tools, stream_callback=stream_callback)
 
     def is_ready(self) -> bool:
         """Check if the agent is initialized and ready."""

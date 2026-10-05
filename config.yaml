@@ -13,7 +13,7 @@ providers:
 
   gemini:
     api_key: ""  # Set via GEMINI_API_KEY env var
-    model: "gemini-2.0-flash"
+    model: "gemini-3.8-flash"
     base_url: "https://generativelanguage.googleapis.com/v1beta"
 
   copilot:
@@ -88,7 +88,7 @@ providers:
 
   nous:
     api_key: ""  # Set via NOUS_API_KEY env var
-    model: "Hermes-3-Llama-3.1-8B"
+    model: "meituan/longcat-2.5-preview:free"
     base_url: "https://inference-api.nousresearch.com/v1"
 
   custom:

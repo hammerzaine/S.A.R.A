@@ -21,6 +21,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # Add the parent directory to the path so we can import hermes modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Root directory for SARA files
+SARA_ROOT = Path(__file__).parent
+
 
 # Update checker
 import subprocess
@@ -92,17 +95,23 @@ def _load_custom_providers():
         if providers_file.exists():
             with open(providers_file) as f:
                 _custom_providers = json.load(f)
-    except Exception:
+        else:
+            _custom_providers = {}
+    except Exception as e:
+        print(f"Failed to load custom providers: {e}")
         _custom_providers = {}
 
 def _save_custom_providers():
     """Save custom providers to file."""
     try:
         providers_file = SARA_ROOT / "custom_providers.json"
+        SARA_ROOT.mkdir(parents=True, exist_ok=True)
         with open(providers_file, "w") as f:
             json.dump(_custom_providers, f, indent=2)
-    except Exception:
-        pass
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as e:
+        print(f"Failed to save custom providers: {e}")
 
 # Load custom providers on startup
 _load_custom_providers()
@@ -1128,10 +1137,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         // Model management
         const providerModels = {
             openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini"],
-            gemini: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+            gemini: ["gemini-3.8-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
             copilot: ["gpt-4o", "claude-sonnet-4"],
             anthropic: ["claude-sonnet-4", "claude-opus-4", "claude-3-5-sonnet"],
-            openrouter: ["openai/gpt-4o", "anthropic/claude-sonnet-4", "google/gemini-2.0-flash", "meta-llama/llama-3.3-70b"],
+            openrouter: ["openai/gpt-4o", "anthropic/claude-sonnet-4", "google/gemini-3.8-flash", "meta-llama/llama-3.3-70b"],
             groq: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"],
             mistral: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
             deepseek: ["deepseek-chat", "deepseek-coder"],
@@ -1143,7 +1152,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             kimi: ["moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"],
             minimax: ["MiniMax-M1", "MiniMax-M1-40k"],
             zai: ["glm-4-plus", "glm-4-air", "glm-4-flash"],
-            nous: ["Hermes-3-Llama-3.1-8B", "Hermes-3-Llama-3.1-70B"],
+            nous: ["meituan/longcat-2.5-preview:free", "meituan/longcat-2.0:free", "inclusionai/ling-3.0-flash-sante:free", "stepfun/step-3.7-flash:free"],
             custom: []
         };
         
@@ -1517,6 +1526,9 @@ async def websocket_endpoint(websocket: WebSocket):
             "message": "S.A.R.A agent ready! Select a provider and start chatting."
         })
 
+    # Conversation history for this connection
+    conversation_history: List[Dict[str, str]] = []
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -1553,12 +1565,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 "message": "S.A.R.A is thinking..."
             })
 
-            # Process the message through the agent
+            # Process the message through the agent with tool-calling support
+            from tools.tool_calling_agent import chat_with_tools
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: agent.chat(user_message, model=model if model else None)
+                lambda: chat_with_tools(agent, user_message, history=conversation_history)
             )
+
+            # Update conversation history
+            conversation_history.append({"role": "user", "content": user_message})
+            conversation_history.append({"role": "assistant", "content": response})
 
             # Send the response
             await websocket.send_json({
@@ -1682,7 +1699,8 @@ async def get_skills():
 async def get_tools():
     """Get all available tools."""
     try:
-        from tools.registry import registry
+        from tools.registry import registry, discover_builtin_tools
+        discover_builtin_tools()
         tool_names = registry.get_all_tool_names()
         return {
             "count": len(tool_names),
@@ -1813,6 +1831,11 @@ async def add_custom_provider(request: Request):
             "api_key": api_key,
         }
         _save_custom_providers()
+    
+    # Verify the file was written
+    providers_file = SARA_ROOT / "custom_providers.json"
+    if not providers_file.exists():
+        return {"success": False, "error": "Failed to save provider to disk"}
     
     return {"success": True, "id": provider_id, "name": name}
 
